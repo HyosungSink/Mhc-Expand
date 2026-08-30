@@ -1,0 +1,158 @@
+{
+  "category": "correctness",
+  "description": "Precision and sensitivity cases for forward copy and backward reduction.",
+  "cases": [
+    {
+      "name": "backward_fp32_triplet_float16",
+      "mode": "backward",
+      "dtype": "float16",
+      "s": 3,
+      "d": 17,
+      "mhc_mult": 3,
+      "pattern": "precision_triplet",
+      "seed": 42768,
+      "tags": [
+        "precision",
+        "precision_triplet",
+        "cancellation",
+        "non_aligned_d"
+      ]
+    },
+    {
+      "name": "backward_large_values_float16",
+      "mode": "backward",
+      "dtype": "float16",
+      "s": 9,
+      "d": 33,
+      "mhc_mult": 8,
+      "pattern": "large_values",
+      "seed": 43883,
+      "tags": [
+        "precision",
+        "large_value_accumulation",
+        "non_aligned_d"
+      ]
+    },
+    {
+      "name": "backward_cancellation_float16",
+      "mode": "backward",
+      "dtype": "float16",
+      "s": 7,
+      "d": 31,
+      "mhc_mult": 8,
+      "pattern": "cancellation",
+      "seed": 43739,
+      "tags": [
+        "precision",
+        "cancellation",
+        "non_aligned_d"
+      ]
+    },
+    {
+      "name": "backward_fp32_triplet_bfloat16",
+      "mode": "backward",
+      "dtype": "bfloat16",
+      "s": 3,
+      "d": 17,
+      "mhc_mult": 3,
+      "pattern": "precision_triplet",
+      "seed": 45659,
+      "tags": [
+        "precision",
+        "precision_triplet",
+        "cancellation",
+        "non_aligned_d"
+      ]
+    },
+    {
+      "name": "backward_large_values_bfloat16",
+      "mode": "backward",
+      "dtype": "bfloat16",
+      "s": 9,
+      "d": 33,
+      "mhc_mult": 8,
+      "pattern": "large_values",
+      "seed": 46774,
+      "tags": [
+        "precision",
+        "large_value_accumulation",
+        "non_aligned_d"
+      ]
+    },
+    {
+      "name": "backward_cancellation_bfloat16",
+      "mode": "backward",
+      "dtype": "bfloat16",
+      "s": 7,
+      "d": 31,
+      "mhc_mult": 8,
+      "pattern": "cancellation",
+      "seed": 46630,
+      "tags": [
+        "precision",
+        "cancellation",
+        "non_aligned_d"
+      ]
+    },
+    {
+      "name": "sensitivity_forward_multitile_float16",
+      "mode": "forward",
+      "dtype": "float16",
+      "s": 1,
+      "d": 32768,
+      "mhc_mult": 2,
+      "pattern": "ramp",
+      "seed": 72398,
+      "tags": [
+        "correctness",
+        "sensitivity",
+        "wide_row"
+      ]
+    },
+    {
+      "name": "sensitivity_backward_multitile_float16",
+      "mode": "backward",
+      "dtype": "float16",
+      "s": 2,
+      "d": 16384,
+      "mhc_mult": 3,
+      "pattern": "precision_triplet",
+      "seed": 75879,
+      "tags": [
+        "correctness",
+        "sensitivity",
+        "wide_row"
+      ]
+    },
+    {
+      "name": "sensitivity_forward_multitile_tail_bfloat16",
+      "mode": "forward",
+      "dtype": "bfloat16",
+      "s": 3,
+      "d": 16385,
+      "mhc_mult": 3,
+      "pattern": "ramp",
+      "seed": 96910,
+      "tags": [
+        "correctness",
+        "sensitivity",
+        "wide_row"
+      ]
+    },
+    {
+      "name": "sensitivity_backward_multitile_tail_bfloat16",
+      "mode": "backward",
+      "dtype": "bfloat16",
+      "s": 3,
+      "d": 8193,
+      "mhc_mult": 3,
+      "pattern": "precision_triplet",
+      "seed": 101010,
+      "tags": [
+        "correctness",
+        "sensitivity",
+        "wide_row"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,120 @@
+{
+  "category": "mock",
+  "cases": [
+    {
+      "s": 64,
+      "d": 256,
+      "m": 2,
+      "backward": false,
+      "dtype": "float16",
+      "test_point": 1,
+      "seed": 182971,
+      "pattern": "uniform",
+      "atol": 0.02,
+      "rtol": 0.01,
+      "tol": 0.001
+    },
+    {
+      "s": 1024,
+      "d": 4096,
+      "m": 4,
+      "backward": false,
+      "dtype": "float16",
+      "test_point": 2,
+      "seed": 90572,
+      "pattern": "uniform",
+      "atol": 0.02,
+      "rtol": 0.01,
+      "tol": 0.001
+    },
+    {
+      "s": 8192,
+      "d": 7168,
+      "m": 8,
+      "backward": false,
+      "dtype": "float16",
+      "test_point": 3,
+      "seed": 402,
+      "pattern": "uniform",
+      "atol": 0.02,
+      "rtol": 0.01,
+      "tol": 0.001
+    },
+    {
+      "s": 1024,
+      "d": 4096,
+      "m": 4,
+      "backward": true,
+      "dtype": "float16",
+      "test_point": 4,
+      "seed": 6510,
+      "pattern": "uniform",
+      "atol": 0.02,
+      "rtol": 0.01,
+      "tol": 0.001
+    },
+    {
+      "s": 64,
+      "d": 256,
+      "m": 2,
+      "backward": true,
+      "dtype": "float16",
+      "test_point": 5,
+      "seed": 42953,
+      "pattern": "uniform",
+      "atol": 0.02,
+      "rtol": 0.01,
+      "tol": 0.001
+    },
+    {
+      "s": 16384,
+      "d": 4096,
+      "m": 4,
+      "backward": false,
+      "dtype": "float16",
+      "test_point": 6,
+      "seed": 7894,
+      "pattern": "uniform",
+      "atol": 0.02,
+      "rtol": 0.01,
+      "tol": 0.001
+    },
+    {
+      "s": 4096,
+      "d": 8192,
+      "m": 8,
+      "backward": false,
+      "dtype": "float16",
+      "test_point": 7,
+      "seed": 271526,
+      "pattern": "uniform",
+      "atol": 0.02,
+      "rtol": 0.01,
+      "tol": 0.001
+    },
+    {
+      "s": 16384,
+      "d": 4096,
+      "m": 4,
+      "backward": true,
+      "dtype": "float16",
+      "test_point": 8,
+      "seed": 2644,
+      "pattern": "uniform",
+      "atol": 0.02,
+      "rtol": 0.01,
+      "tol": 0.001
+    }
+  ],
+  "runtime": {
+    "allocation_policy": "normal-only",
+    "guard_bytes": 512,
+    "profiler_backend": "operator",
+    "warmup": 5,
+    "repeat": 1,
+    "processes": 3,
+    "vector_cores": 0,
+    "resource_mode": "device",
+    "aggregate": "median of independent process medians; retain every observation"
+  }
+}

@@ -1,0 +1,254 @@
+{
+  "category": "coverage",
+  "description": "Problem-stated data types, documented scales, and the combined S=1, D=1, non-aligned boundary.",
+  "cases": [
+    {
+      "name": "forward_small_float16",
+      "mode": "forward",
+      "dtype": "float16",
+      "s": 64,
+      "d": 256,
+      "mhc_mult": 2,
+      "pattern": "random",
+      "seed": 23211,
+      "tags": [
+        "documented_scale",
+        "scale_small",
+        "random_data"
+      ]
+    },
+    {
+      "name": "backward_small_float16",
+      "mode": "backward",
+      "dtype": "float16",
+      "s": 64,
+      "d": 256,
+      "mhc_mult": 2,
+      "pattern": "random",
+      "seed": 25356,
+      "tags": [
+        "documented_scale",
+        "scale_small",
+        "random_data"
+      ]
+    },
+    {
+      "name": "forward_small_bfloat16",
+      "mode": "forward",
+      "dtype": "bfloat16",
+      "s": 64,
+      "d": 256,
+      "mhc_mult": 2,
+      "pattern": "random",
+      "seed": 25318,
+      "tags": [
+        "documented_scale",
+        "scale_small",
+        "random_data"
+      ]
+    },
+    {
+      "name": "backward_small_bfloat16",
+      "mode": "backward",
+      "dtype": "bfloat16",
+      "s": 64,
+      "d": 256,
+      "mhc_mult": 2,
+      "pattern": "random",
+      "seed": 27561,
+      "tags": [
+        "documented_scale",
+        "scale_small",
+        "random_data"
+      ]
+    },
+    {
+      "name": "forward_medium_float16",
+      "mode": "forward",
+      "dtype": "float16",
+      "s": 1024,
+      "d": 4096,
+      "mhc_mult": 4,
+      "pattern": "random",
+      "seed": 25449,
+      "tags": [
+        "documented_scale",
+        "scale_medium",
+        "random_data"
+      ]
+    },
+    {
+      "name": "backward_medium_float16",
+      "mode": "backward",
+      "dtype": "float16",
+      "s": 1024,
+      "d": 4096,
+      "mhc_mult": 4,
+      "pattern": "random",
+      "seed": 27698,
+      "tags": [
+        "documented_scale",
+        "scale_medium",
+        "random_data"
+      ]
+    },
+    {
+      "name": "forward_medium_bfloat16",
+      "mode": "forward",
+      "dtype": "bfloat16",
+      "s": 1024,
+      "d": 4096,
+      "mhc_mult": 4,
+      "pattern": "random",
+      "seed": 27654,
+      "tags": [
+        "documented_scale",
+        "scale_medium",
+        "random_data"
+      ]
+    },
+    {
+      "name": "backward_medium_bfloat16",
+      "mode": "backward",
+      "dtype": "bfloat16",
+      "s": 1024,
+      "d": 4096,
+      "mhc_mult": 4,
+      "pattern": "random",
+      "seed": 30001,
+      "tags": [
+        "documented_scale",
+        "scale_medium",
+        "random_data"
+      ]
+    },
+    {
+      "name": "forward_large_float16",
+      "mode": "forward",
+      "dtype": "float16",
+      "s": 8192,
+      "d": 7168,
+      "mhc_mult": 8,
+      "pattern": "random",
+      "seed": 23064,
+      "tags": [
+        "documented_scale",
+        "scale_large",
+        "random_data"
+      ]
+    },
+    {
+      "name": "backward_large_float16",
+      "mode": "backward",
+      "dtype": "float16",
+      "s": 8192,
+      "d": 7168,
+      "mhc_mult": 8,
+      "pattern": "random",
+      "seed": 25195,
+      "tags": [
+        "documented_scale",
+        "scale_large",
+        "random_data"
+      ]
+    },
+    {
+      "name": "forward_large_bfloat16",
+      "mode": "forward",
+      "dtype": "bfloat16",
+      "s": 8192,
+      "d": 7168,
+      "mhc_mult": 8,
+      "pattern": "random",
+      "seed": 25171,
+      "tags": [
+        "documented_scale",
+        "scale_large",
+        "random_data"
+      ]
+    },
+    {
+      "name": "backward_large_bfloat16",
+      "mode": "backward",
+      "dtype": "bfloat16",
+      "s": 8192,
+      "d": 7168,
+      "mhc_mult": 8,
+      "pattern": "random",
+      "seed": 27400,
+      "tags": [
+        "documented_scale",
+        "scale_large",
+        "random_data"
+      ]
+    },
+    {
+      "name": "forward_scalar_float16",
+      "mode": "forward",
+      "dtype": "float16",
+      "s": 1,
+      "d": 1,
+      "mhc_mult": 2,
+      "pattern": "random",
+      "seed": 25296,
+      "tags": [
+        "boundary",
+        "scalar",
+        "single_token",
+        "single_dimension",
+        "non_aligned_d"
+      ]
+    },
+    {
+      "name": "backward_scalar_float16",
+      "mode": "backward",
+      "dtype": "float16",
+      "s": 1,
+      "d": 1,
+      "mhc_mult": 2,
+      "pattern": "random",
+      "seed": 27534,
+      "tags": [
+        "boundary",
+        "scalar",
+        "single_token",
+        "single_dimension",
+        "non_aligned_d"
+      ]
+    },
+    {
+      "name": "forward_scalar_bfloat16",
+      "mode": "forward",
+      "dtype": "bfloat16",
+      "s": 1,
+      "d": 1,
+      "mhc_mult": 2,
+      "pattern": "random",
+      "seed": 27501,
+      "tags": [
+        "boundary",
+        "scalar",
+        "single_token",
+        "single_dimension",
+        "non_aligned_d"
+      ]
+    },
+    {
+      "name": "backward_scalar_bfloat16",
+      "mode": "backward",
+      "dtype": "bfloat16",
+      "s": 1,
+      "d": 1,
+      "mhc_mult": 2,
+      "pattern": "random",
+      "seed": 29837,
+      "tags": [
+        "boundary",
+        "scalar",
+        "single_token",
+        "single_dimension",
+        "non_aligned_d"
+      ]
+    }
+  ]
+}
