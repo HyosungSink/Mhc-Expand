@@ -280,6 +280,7 @@ private:
     // 把原来跨 lane 的跳读并成一次连续搬运。
     __aicore__ inline void ReduceGrouped()
     {
+        constexpr uint32_t elemsPerBlock = MHC_BLOCK_BYTES / sizeof(DT_X);
         const uint32_t groupElems = stageElems_ * laneGroup_;
         AscendC::TBuf<AscendC::TPosition::VECCALC> inStage;
         AscendC::TBuf<AscendC::TPosition::VECCALC> accBuf;
