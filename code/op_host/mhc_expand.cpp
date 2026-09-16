@@ -133,9 +133,8 @@ namespace optiling {
             const bool alignedRow = (colCount * elemSize) % BLOCK_BYTES == 0U;
             const uint64_t pitch = alignedRow ? colCount : CeilDiv(colCount, elemsPerBlock) * elemsPerBlock;
             const uint64_t lanes = static_cast<uint64_t>(mult);
-            // 反向一次读入全部 lane：UB 要放下 m 份输入双缓冲、FP32 累加、FP32 暂存和输出双缓冲。
-            const uint64_t budget =
-                backward ? (UB_USABLE_BYTES / (4U * lanes + 12U)) : FORWARD_STAGE_ELEMS;
+            // 反向逐份读取时每个元素占 16B：输入双缓冲、FP32 累加、FP32 暂存和输出双缓冲。
+            const uint64_t budget = backward ? (UB_USABLE_BYTES / 16U) : FORWARD_STAGE_ELEMS;
 
             // 工作单元：列未切分时是一整行，列切分后是一行中的一个列块。
             uint64_t tileCols = colCount;
@@ -143,8 +142,7 @@ namespace optiling {
             uint64_t ubPitch = pitch;
             uint64_t maxRows = 1U;
             if (pitch <= budget) {
-                maxRows = backward ? ((UB_USABLE_BYTES - 4U * pitch) / (4U * pitch * (lanes + 2U)))
-                                   : (budget / pitch);
+                maxRows = budget / pitch;
                 if (maxRows == 0U) {
                     maxRows = 1U;
                 }
@@ -155,13 +153,6 @@ namespace optiling {
                 }
                 if (maxRows > MAX_BLOCK_COUNT) {
                     maxRows = MAX_BLOCK_COUNT;
-                }
-                // 反向分组读取的 blockCount 是 rows * mhc_mult。
-                if (backward && maxRows * lanes > MAX_BLOCK_COUNT) {
-                    maxRows = MAX_BLOCK_COUNT / lanes;
-                    if (maxRows == 0U) {
-                        maxRows = 1U;
-                    }
                 }
             } else {
                 const uint64_t maxCols = (budget / elemsPerBlock) * elemsPerBlock;
@@ -180,7 +171,21 @@ namespace optiling {
                 (!alignedRow ||
                  (((colCount - tileCols) * elemSize) / BLOCK_BYTES <= MAX_GAP_BLOCKS &&
                   (tileCols * elemSize) / BLOCK_BYTES <= MAX_GAP_BLOCKS))) {
-                laneGroup = lanes;
+                // 分组读取要额外容纳 m 份输入，放不下时保留逐份读取和较大的列块。
+                const uint64_t groupedRows =
+                    (UB_USABLE_BYTES - 4U * ubPitch) / (4U * ubPitch * (lanes + 2U));
+                if (groupedRows >= 1U) {
+                    laneGroup = lanes;
+                    if (maxRows > groupedRows) {
+                        maxRows = groupedRows;
+                    }
+                    if (maxRows * lanes > MAX_BLOCK_COUNT) {
+                        maxRows = MAX_BLOCK_COUNT / lanes;
+                    }
+                    if (maxRows == 0U) {
+                        maxRows = 1U;
+                    }
+                }
             }
             if (!backward && alignedRow && colTiles == 1U && mult > 1) {
                 for (uint64_t candidate = static_cast<uint64_t>(mult); candidate >= 2U; --candidate) {
