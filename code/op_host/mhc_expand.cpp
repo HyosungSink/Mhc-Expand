@@ -13,6 +13,7 @@ constexpr uint64_t FORWARD_STAGE_ELEMS = 32768U;  // 前向：2 份暂存缓冲
 constexpr uint64_t BACKWARD_STAGE_ELEMS = 10240U; // 反向：lane/累加/输出共 16B 每元素
 constexpr uint64_t MIN_TILE_ELEMS = 2048U;        // 单个 tile 的元素下限，用于收敛小形状的核数
 constexpr uint64_t FORWARD_REPLICA_ELEMS = 45056U; // 前向副本路径：输入加副本的单份元素上限
+constexpr uint64_t MIN_REPLICA_CHUNKS = 3U;        // 副本路径至少需要的核内 tile 数
 constexpr int64_t DEFAULT_MULT = 2;
 
 inline uint64_t CeilDiv(uint64_t value, uint64_t divisor)
@@ -173,6 +174,7 @@ namespace optiling {
                     break;
                 }
             }
+            const uint64_t plainRows = maxRows;
             if (repLanes > 1U) {
                 maxRows = FORWARD_REPLICA_ELEMS / (colCount * (1U + repLanes));
                 if (maxRows == 0U) {
@@ -204,11 +206,19 @@ namespace optiling {
             uint64_t tileRows = 1U;
             if (colTiles == 1U) {
                 const uint64_t busiest = unitsPerCore + ((tailUnits != 0U) ? 1U : 0U);
-                const uint64_t chunks = CeilDiv(busiest, maxRows);
+                uint64_t chunks = CeilDiv(busiest, maxRows);
+                // 副本路径多一级 V 流水，核内 tile 太少时填不满流水，退回直写。
+                if (repLanes > 1U && chunks < MIN_REPLICA_CHUNKS) {
+                    repLanes = 1U;
+                    maxRows = plainRows;
+                    chunks = CeilDiv(busiest, maxRows);
+                }
                 tileRows = (chunks == 0U) ? 1U : CeilDiv(busiest, chunks);
                 if (tileRows == 0U) {
                     tileRows = 1U;
                 }
+            } else {
+                repLanes = 1U;
             }
 
             tiling->rowLen = static_cast<uint32_t>(cols);
