@@ -149,9 +149,30 @@ private:
             ready.SetFlag(event);
             ready.WaitFlag(event);
             const int64_t base = static_cast<int64_t>(rowBase) * mult_ * rowLen_ + colBase;
-            for (uint32_t lane = 0U; lane < mult_; ++lane) {
-                StoreTile(base + static_cast<int64_t>(lane) * rowLen_, tile, rows, cols,
-                          mult_ * rowLen_);
+            const uint32_t gap = mult_ * rowLen_ - cols;
+            if constexpr (IS_ALIGNED) {
+                if (rows == 1U) {
+                    for (uint32_t lane = 0U; lane < mult_; ++lane) {
+                        AscendC::DataCopy(oGm_[base + static_cast<int64_t>(lane) * rowLen_], tile,
+                                          cols);
+                    }
+                } else {
+                    const AscendC::DataCopyParams emit(
+                        static_cast<uint16_t>(rows),
+                        static_cast<uint16_t>(cols * sizeof(DT_X) / MHC_BLOCK_BYTES), 0U,
+                        static_cast<uint16_t>(gap * sizeof(DT_X) / MHC_BLOCK_BYTES));
+                    for (uint32_t lane = 0U; lane < mult_; ++lane) {
+                        AscendC::DataCopy(oGm_[base + static_cast<int64_t>(lane) * rowLen_], tile,
+                                          emit);
+                    }
+                }
+            } else {
+                const AscendC::DataCopyExtParams emit(
+                    static_cast<uint16_t>(rows), cols * sizeof(DT_X), 0U, gap * sizeof(DT_X), 0U);
+                for (uint32_t lane = 0U; lane < mult_; ++lane) {
+                    AscendC::DataCopyPad(oGm_[base + static_cast<int64_t>(lane) * rowLen_], tile,
+                                         emit);
+                }
             }
             reuse.SetFlag(event);
         }
@@ -177,6 +198,15 @@ private:
         const uint32_t laneBlocks = rowLen_ * sizeof(DT_X) / MHC_BLOCK_BYTES;
         const uint32_t groupBlocks = laneBlocks * laneGroup_;
         const uint32_t groups = mult_ / laneGroup_;
+        const uint32_t groupStride = laneGroup_ * rowLen_;
+        const uint32_t rowStride = mult_ * rowLen_;
+        // 整块 tile 的搬运参数在循环外构造，尾块只改 blockCount。
+        AscendC::DataCopyParams spread(static_cast<uint16_t>(tileRows_),
+                                       static_cast<uint16_t>(laneBlocks), 0U,
+                                       static_cast<uint16_t>(groupBlocks - laneBlocks));
+        AscendC::DataCopyParams emit(static_cast<uint16_t>(tileRows_),
+                                     static_cast<uint16_t>(groupBlocks), 0U,
+                                     static_cast<uint16_t>(laneBlocks * (mult_ - laneGroup_)));
         uint32_t index = 0U;
         for (uint32_t unit = unitStart_; unit < unitEnd_; ++index) {
             const uint32_t slot = index & 1U;
@@ -184,11 +214,15 @@ private:
             if (index >= 2U) {
                 inFree.WaitFlag(event);
             }
-            uint32_t rows = 0U;
-            uint32_t cols = 0U;
-            uint32_t rowBase = 0U;
-            uint32_t colBase = 0U;
-            unit += Locate(unit, rows, cols, rowBase, colBase);
+            const uint32_t rowBase = unit;
+            uint32_t rows = unitEnd_ - unit;
+            if (rows > tileRows_) {
+                rows = tileRows_;
+            } else {
+                spread.blockCount = static_cast<uint16_t>(rows);
+                emit.blockCount = static_cast<uint16_t>(rows);
+            }
+            unit += rows;
             AscendC::LocalTensor<DT_X> in = inAll[slot * stageElems_];
             AscendC::DataCopy(in, xGm_[static_cast<int64_t>(rowBase) * rowLen_], rows * rowLen_);
             loaded.SetFlag(event);
@@ -198,28 +232,18 @@ private:
             }
             AscendC::LocalTensor<DT_X> out = outAll[slot * outElems];
             for (uint32_t lane = 0U; lane < laneGroup_; ++lane) {
-                if (rows == 1U) {
-                    AscendC::DataCopy(out[lane * rowLen_], in, rowLen_);
-                } else {
-                    AscendC::DataCopyParams spread(
-                        static_cast<uint16_t>(rows), static_cast<uint16_t>(laneBlocks), 0U,
-                        static_cast<uint16_t>(groupBlocks - laneBlocks));
-                    AscendC::DataCopy(out[lane * rowLen_], in, spread);
-                }
+                AscendC::DataCopy(out[lane * rowLen_], in, spread);
             }
             inFree.SetFlag(event);
             filled.SetFlag(event);
             filled.WaitFlag(event);
-            const int64_t base = static_cast<int64_t>(rowBase) * mult_ * rowLen_;
+            const int64_t base = static_cast<int64_t>(rowBase) * rowStride;
             if (groups == 1U) {
-                AscendC::DataCopy(oGm_[base], out, rows * mult_ * rowLen_);
+                AscendC::DataCopy(oGm_[base], out, rows * rowStride);
             } else {
-                AscendC::DataCopyParams emit(
-                    static_cast<uint16_t>(rows), static_cast<uint16_t>(groupBlocks), 0U,
-                    static_cast<uint16_t>(laneBlocks * (mult_ - laneGroup_)));
                 for (uint32_t group = 0U; group < groups; ++group) {
-                    AscendC::DataCopy(oGm_[base + static_cast<int64_t>(group) * laneGroup_ * rowLen_],
-                                      out, emit);
+                    AscendC::DataCopy(oGm_[base + static_cast<int64_t>(group) * groupStride], out,
+                                      emit);
                 }
             }
             outFree.SetFlag(event);
