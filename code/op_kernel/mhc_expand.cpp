@@ -23,6 +23,7 @@ public:
         tileCols_ = tiling.tileCols;
         colTiles_ = tiling.colTiles;
         ubPitch_ = tiling.ubPitch;
+        repLanes_ = tiling.repLanes;
         stageElems_ = tileRows_ * ubPitch_;
         const uint32_t block = static_cast<uint32_t>(AscendC::GetBlockIdx());
         unitStart_ = block * tiling.unitsPerCore + ((block < tiling.tailUnits) ? block : tiling.tailUnits);
@@ -38,6 +39,8 @@ public:
         }
         if constexpr (IS_BACKWARD) {
             Reduce();
+        } else if (repLanes_ > 1U) {
+            ExpandReplicated();
         } else {
             Expand();
         }
@@ -151,6 +154,76 @@ private:
         Drain(reuse, index);
     }
 
+    // 先在 UB 内排出 repLanes 份副本，再按 repLanes*D 的连续块写回，
+    // 把 MTE3 的写出粒度从一份副本放大到 repLanes 份。
+    __aicore__ inline void ExpandReplicated()
+    {
+        const uint32_t outElems = stageElems_ * repLanes_;
+        AscendC::TBuf<AscendC::TPosition::VECCALC> inStage;
+        AscendC::TBuf<AscendC::TPosition::VECCALC> outStage;
+        pipe_.InitBuffer(inStage, stageElems_ * sizeof(DT_X) * 2U);
+        pipe_.InitBuffer(outStage, outElems * sizeof(DT_X) * 2U);
+        AscendC::LocalTensor<DT_X> inAll = inStage.Get<DT_X>();
+        AscendC::LocalTensor<DT_X> outAll = outStage.Get<DT_X>();
+        AscendC::TQueSync<PIPE_MTE2, PIPE_V> loaded;
+        AscendC::TQueSync<PIPE_V, PIPE_MTE2> inFree;
+        AscendC::TQueSync<PIPE_V, PIPE_MTE3> filled;
+        AscendC::TQueSync<PIPE_MTE3, PIPE_V> outFree;
+
+        const uint32_t laneBlocks = rowLen_ * sizeof(DT_X) / MHC_BLOCK_BYTES;
+        const uint32_t groupBlocks = laneBlocks * repLanes_;
+        const uint32_t groups = mult_ / repLanes_;
+        uint32_t index = 0U;
+        for (uint32_t unit = unitStart_; unit < unitEnd_; ++index) {
+            const uint32_t slot = index & 1U;
+            const AscendC::TEventID event = static_cast<AscendC::TEventID>(slot);
+            if (index >= 2U) {
+                inFree.WaitFlag(event);
+            }
+            uint32_t rows = 0U;
+            uint32_t cols = 0U;
+            uint32_t rowBase = 0U;
+            uint32_t colBase = 0U;
+            unit += Locate(unit, rows, cols, rowBase, colBase);
+            AscendC::LocalTensor<DT_X> in = inAll[slot * stageElems_];
+            AscendC::DataCopy(in, xGm_[static_cast<int64_t>(rowBase) * rowLen_], rows * rowLen_);
+            loaded.SetFlag(event);
+            loaded.WaitFlag(event);
+            if (index >= 2U) {
+                outFree.WaitFlag(event);
+            }
+            AscendC::LocalTensor<DT_X> out = outAll[slot * outElems];
+            for (uint32_t lane = 0U; lane < repLanes_; ++lane) {
+                if (rows == 1U) {
+                    AscendC::DataCopy(out[lane * rowLen_], in, rowLen_);
+                } else {
+                    AscendC::DataCopyParams spread(
+                        static_cast<uint16_t>(rows), static_cast<uint16_t>(laneBlocks), 0U,
+                        static_cast<uint16_t>(groupBlocks - laneBlocks));
+                    AscendC::DataCopy(out[lane * rowLen_], in, spread);
+                }
+            }
+            inFree.SetFlag(event);
+            filled.SetFlag(event);
+            filled.WaitFlag(event);
+            const int64_t base = static_cast<int64_t>(rowBase) * mult_ * rowLen_;
+            if (groups == 1U) {
+                AscendC::DataCopy(oGm_[base], out, rows * mult_ * rowLen_);
+            } else {
+                AscendC::DataCopyParams emit(
+                    static_cast<uint16_t>(rows), static_cast<uint16_t>(groupBlocks), 0U,
+                    static_cast<uint16_t>(laneBlocks * (mult_ - repLanes_)));
+                for (uint32_t group = 0U; group < groups; ++group) {
+                    AscendC::DataCopy(oGm_[base + static_cast<int64_t>(group) * repLanes_ * rowLen_],
+                                      out, emit);
+                }
+            }
+            outFree.SetFlag(event);
+        }
+        Drain(inFree, index);
+        Drain(outFree, index);
+    }
+
     __aicore__ inline void Reduce()
     {
         const uint32_t stageBytes = stageElems_ * sizeof(DT_X);
@@ -236,6 +309,7 @@ private:
     uint32_t tileCols_ = 0U;
     uint32_t colTiles_ = 0U;
     uint32_t ubPitch_ = 0U;
+    uint32_t repLanes_ = 1U;
     uint32_t stageElems_ = 0U;
     uint32_t unitStart_ = 0U;
     uint32_t unitEnd_ = 0U;

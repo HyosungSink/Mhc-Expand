@@ -12,6 +12,7 @@ constexpr uint64_t MAX_GAP_BLOCKS = 65535U;
 constexpr uint64_t FORWARD_STAGE_ELEMS = 32768U;  // 前向：2 份暂存缓冲
 constexpr uint64_t BACKWARD_STAGE_ELEMS = 10240U; // 反向：lane/累加/输出共 16B 每元素
 constexpr uint64_t MIN_TILE_ELEMS = 2048U;        // 单个 tile 的元素下限，用于收敛小形状的核数
+constexpr uint64_t FORWARD_REPLICA_ELEMS = 45056U; // 前向副本路径：输入加副本的单份元素上限
 constexpr int64_t DEFAULT_MULT = 2;
 
 inline uint64_t CeilDiv(uint64_t value, uint64_t divisor)
@@ -154,6 +155,34 @@ namespace optiling {
                 ubPitch = tileCols;
             }
 
+            // 前向把 repLanes 份副本先在 UB 内排好，MTE3 就能按 repLanes*D 连续写出。
+            uint64_t repLanes = 1U;
+            if (!backward && alignedRow && colTiles == 1U && mult > 1) {
+                for (uint64_t candidate = static_cast<uint64_t>(mult); candidate >= 2U; --candidate) {
+                    if (static_cast<uint64_t>(mult) % candidate != 0U) {
+                        continue;
+                    }
+                    if (colCount * (1U + candidate) > FORWARD_REPLICA_ELEMS) {
+                        continue;
+                    }
+                    if (((static_cast<uint64_t>(mult) - candidate) * colCount * elemSize) / BLOCK_BYTES >
+                        MAX_GAP_BLOCKS) {
+                        continue;
+                    }
+                    repLanes = candidate;
+                    break;
+                }
+            }
+            if (repLanes > 1U) {
+                maxRows = FORWARD_REPLICA_ELEMS / (colCount * (1U + repLanes));
+                if (maxRows == 0U) {
+                    maxRows = 1U;
+                }
+                if (maxRows > MAX_BLOCK_COUNT) {
+                    maxRows = MAX_BLOCK_COUNT;
+                }
+            }
+
             // 小形状下每个核的固定开销主导耗时，给每个核设一个工作量下限来收敛核数。
             const uint64_t totalUnits = static_cast<uint64_t>(rows) * colTiles;
             uint64_t denseUnits = 1U;
@@ -191,6 +220,7 @@ namespace optiling {
             tiling->unitsPerCore = static_cast<uint32_t>(unitsPerCore);
             tiling->tailUnits = static_cast<uint32_t>(tailUnits);
             tiling->ubPitch = static_cast<uint32_t>(ubPitch);
+            tiling->repLanes = static_cast<uint32_t>(repLanes);
         } else {
             tiling->rowLen = 0U;
             tiling->mult = static_cast<uint32_t>(mult);
@@ -201,6 +231,7 @@ namespace optiling {
             tiling->unitsPerCore = 0U;
             tiling->tailUnits = 0U;
             tiling->ubPitch = static_cast<uint32_t>(elemsPerBlock);
+            tiling->repLanes = 1U;
         }
 
         uint32_t dtypeKey = static_cast<uint32_t>(dtypeX);
