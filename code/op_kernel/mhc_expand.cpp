@@ -181,7 +181,6 @@ private:
                 LocalTensor<DT_F> total = accBuf_.Get<DT_F>();
                 LocalTensor<DT_F> wide = wideBuf_.Get<DT_F>();
                 Duplicate(total, static_cast<DT_F>(0), info_.tileLen);
-                PipeBarrier<PIPE_ALL>();
                 for (uint32_t lane = 0; lane < info_.lanes; ++lane) {
                     LoadOneLane(begin + lane * info_.rowLen, len);
                     LocalTensor<DT_X> raw = laneQue_.DeQue<DT_X>();
@@ -189,10 +188,8 @@ private:
                     Add(total, total, wide, len);
                     laneQue_.FreeTensor(raw);
                 }
-                PipeBarrier<PIPE_ALL>();
                 LocalTensor<DT_X> result = outQue_.AllocTensor<DT_X>();
                 Cast(result, total, RoundMode::CAST_RINT, len);
-                PipeBarrier<PIPE_ALL>();
                 outQue_.EnQue(result);
                 StoreRow(row * info_.rowLen + offset, len);
             }
