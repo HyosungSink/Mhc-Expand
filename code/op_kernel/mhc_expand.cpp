@@ -338,6 +338,8 @@ private:
         AscendC::TQueSync<PIPE_V, PIPE_MTE3> reduced;
         AscendC::TQueSync<PIPE_MTE3, PIPE_V> outFree;
 
+        // lane 缓冲的槽位跨 tile 连续轮转，避免每个 tile 结束时把 MTE2 拦在 V 后面。
+        uint32_t laneSeq = 0U;
         uint32_t index = 0U;
         for (uint32_t unit = unitStart_; unit < unitEnd_; ++index) {
             uint32_t rows = 0U;
@@ -347,10 +349,10 @@ private:
             unit += Locate(unit, rows, cols, rowBase, colBase);
             const uint32_t elems = (rows > 1U) ? (rows * ubPitch_) : cols;
             const int64_t base = static_cast<int64_t>(rowBase) * mult_ * rowLen_ + colBase;
-            for (uint32_t lane = 0U; lane < mult_; ++lane) {
-                const uint32_t slot = lane & 1U;
+            for (uint32_t lane = 0U; lane < mult_; ++lane, ++laneSeq) {
+                const uint32_t slot = laneSeq & 1U;
                 const AscendC::TEventID event = static_cast<AscendC::TEventID>(slot);
-                if (lane >= 2U) {
+                if (laneSeq >= 2U) {
                     laneFree.WaitFlag(event);
                 }
                 AscendC::LocalTensor<DT_X> tile = lanes[slot * stageElems_];
@@ -366,7 +368,6 @@ private:
                 }
                 laneFree.SetFlag(event);
             }
-            Drain(laneFree, mult_);
             const uint32_t slot = index & 1U;
             const AscendC::TEventID event = static_cast<AscendC::TEventID>(slot);
             if (index >= 2U) {
@@ -379,6 +380,7 @@ private:
             StoreTile(static_cast<int64_t>(rowBase) * rowLen_ + colBase, out, rows, cols, rowLen_);
             outFree.SetFlag(event);
         }
+        Drain(laneFree, laneSeq);
         Drain(outFree, index);
     }
 
