@@ -25,8 +25,6 @@ constexpr uint32_t MHC_ELEM_BYTES = 2;
 constexpr uint32_t MHC_BLOCK_ELEMS = 32 / MHC_ELEM_BYTES;
 
 
-// Event that retires a lane transfer before its tile is handed to the fold.
-constexpr event_t MHC_LANE_EVENT = EVENT_ID0;
 
 
 }  // namespace
@@ -45,13 +43,11 @@ public:
         // A vector store covers whole blocks, so a scratch tile is sized for the
         // block aligned length of a tile, never for its payload alone.
         const uint32_t tileBytes = BlockAligned(info.tileLen) * MHC_ELEM_BYTES;
-        pipe_.InitBuffer(inQue_, 2, AlignUp(tileBytes));
+        pipe_.InitBuffer(inQue_, 4, AlignUp(tileBytes));
         pipe_.InitBuffer(outQue_, 2, AlignUp(tileBytes));
         if constexpr (BACKWARD != 0) {
-            pipe_.InitBuffer(laneQue_, 8, AlignUp(tileBytes));
             pipe_.InitBuffer(wideBuf_, AlignUp(info.tileLen * static_cast<uint32_t>(sizeof(DT_F))));
             pipe_.InitBuffer(accBuf_, AlignUp(info.tileLen * static_cast<uint32_t>(sizeof(DT_F))));
-            pipe_.InitBuffer(resBuf_, AlignUp(tileBytes));
         }
     }
 
@@ -98,28 +94,6 @@ private:
         pad.paddingValue = 0;
         DataCopyPad(tile, xGm_[begin], params, pad);
         inQue_.EnQue(tile);
-    }
-
-    // Queues one lane tile. The queue holds it until the reduction folds it, so
-    // the transfer of the next lane can already be in flight while the vector
-    // engine works on the current one.
-    __aicore__ inline void LoadOneLane(uint32_t begin, uint32_t len) {
-        LocalTensor<DT_X> tile = laneQue_.AllocTensor<DT_X>();
-        DataCopyExtParams params;
-        params.blockCount = 1;
-        params.blockLen = len * MHC_ELEM_BYTES;
-        params.srcStride = 0;
-        params.dstStride = 0;
-        params.rsv = 0;
-        DataCopyPadExtParams<DT_X> pad;
-        pad.isPad = false;
-        pad.leftPadding = 0;
-        pad.rightPadding = 0;
-        pad.paddingValue = 0;
-        DataCopyPad(tile, xGm_[begin], params, pad);
-        SetFlag<HardEvent::MTE2_V>(MHC_LANE_EVENT);
-        WaitFlag<HardEvent::MTE2_V>(MHC_LANE_EVENT);
-        laneQue_.EnQue(tile);
     }
 
     // A payload that fills whole blocks is written block by block, which moves
@@ -170,6 +144,8 @@ private:
     // never read while its own transfer is still in flight.
     __aicore__ inline void ReduceRows() {
         const uint32_t rowEnd = MinU32(RowBegin() + info_.rowTile, info_.rowTotal);
+        printf("V b=%u rt=%u rtot=%u rl=%u tl=%u ct=%u L=%u\n", (uint32_t)GetBlockIdx(), info_.rowTile,
+               info_.rowTotal, info_.rowLen, info_.tileLen, info_.colTiles, info_.lanes);
         for (uint32_t row = RowBegin(); row < rowEnd; ++row) {
             for (uint32_t col = 0; col < info_.colTiles; ++col) {
                 const uint32_t offset = col * info_.tileLen;
@@ -179,11 +155,11 @@ private:
                 LocalTensor<DT_F> wide = wideBuf_.Get<DT_F>();
                 Duplicate(total, static_cast<DT_F>(0), info_.tileLen);
                 for (uint32_t lane = 0; lane < info_.lanes; ++lane) {
-                    LoadOneLane(begin + lane * info_.rowLen, len);
-                    LocalTensor<DT_X> raw = laneQue_.DeQue<DT_X>();
+                    LoadRow(begin + lane * info_.rowLen, len);
+                    LocalTensor<DT_X> raw = inQue_.DeQue<DT_X>();
                     Cast(wide, raw, RoundMode::CAST_NONE, len);
                     Add(total, total, wide, len);
-                    laneQue_.FreeTensor(raw);
+                    inQue_.FreeTensor(raw);
                 }
                 LocalTensor<DT_X> result = outQue_.AllocTensor<DT_X>();
                 Cast(result, total, RoundMode::CAST_RINT, len);
@@ -195,12 +171,10 @@ private:
 
     MhcExpandTilingData info_;
     TPipe pipe_;
-    TQue<QuePosition::VECIN, 2> inQue_;
+    TQue<QuePosition::VECIN, 4> inQue_;
     TQue<QuePosition::VECOUT, 2> outQue_;
-    TQue<QuePosition::VECIN, 8> laneQue_;
     TBuf<QuePosition::VECCALC> wideBuf_;
     TBuf<QuePosition::VECCALC> accBuf_;
-    TBuf<QuePosition::VECCALC> resBuf_;
     GlobalTensor<DT_X> xGm_;
     GlobalTensor<DT_X> oGm_;
 };
