@@ -11,6 +11,7 @@ constexpr uint64_t MAX_BLOCK_COUNT = 4095U;
 constexpr uint64_t MAX_GAP_BLOCKS = 65535U;
 constexpr uint64_t FORWARD_STAGE_ELEMS = 32768U;  // 前向：2 份暂存缓冲
 constexpr uint64_t BACKWARD_STAGE_ELEMS = 10240U; // 反向：lane/累加/输出共 16B 每元素
+constexpr uint64_t MIN_TILE_ELEMS = 2048U;        // 单个 tile 的元素下限，用于收敛小形状的核数
 constexpr int64_t DEFAULT_MULT = 2;
 
 inline uint64_t CeilDiv(uint64_t value, uint64_t divisor)
@@ -145,6 +146,11 @@ namespace optiling {
                 }
                 const uint64_t rowsPerCore = CeilDiv(static_cast<uint64_t>(rows), coreNum);
                 tileRows = (maxRows < rowsPerCore) ? maxRows : rowsPerCore;
+                // 小形状下每个核的固定开销主导耗时，抬高单 tile 的下限来收敛核数。
+                const uint64_t denseRows = CeilDiv(MIN_TILE_ELEMS, pitch);
+                if (tileRows < denseRows) {
+                    tileRows = (maxRows < denseRows) ? maxRows : denseRows;
+                }
                 if (tileRows == 0U) {
                     tileRows = 1U;
                 }
