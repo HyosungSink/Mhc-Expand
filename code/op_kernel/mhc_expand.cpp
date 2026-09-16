@@ -24,9 +24,6 @@ constexpr uint32_t MHC_ELEM_BYTES = 2;
 // Elements of one 32B block.
 constexpr uint32_t MHC_BLOCK_ELEMS = 32 / MHC_ELEM_BYTES;
 
-// Event that retires a lane transfer before its tile is handed to the fold.
-constexpr event_t MHC_LANE_EVENT = EVENT_ID0;
-
 
 }  // namespace
 
@@ -99,9 +96,9 @@ private:
         inQue_.EnQue(tile);
     }
 
-    // Queues one lane tile. The queue holds it until the reduction folds it, so
-    // the transfer of the next lane can already be in flight while the vector
-    // engine works on the current one.
+    // Queues one lane tile of the expanded stream. The queue holds it until the
+    // reduction folds it, so the transfer of the next lane can already be in
+    // flight while the vector engine works on the current one.
     __aicore__ inline void LoadOneLane(uint32_t begin, uint32_t len) {
         LocalTensor<DT_X> tile = laneQue_.AllocTensor<DT_X>();
         DataCopyExtParams params;
@@ -116,8 +113,6 @@ private:
         pad.rightPadding = 0;
         pad.paddingValue = 0;
         DataCopyPad(tile, xGm_[begin], params, pad);
-        SetFlag<HardEvent::MTE2_V>(MHC_LANE_EVENT);
-        WaitFlag<HardEvent::MTE2_V>(MHC_LANE_EVENT);
         laneQue_.EnQue(tile);
     }
 
@@ -167,10 +162,10 @@ private:
         }
     }
 
-    // The lanes of one row tile are all loaded before any of them is folded.
-    // While the vector engine folds a tile the transfer engine already streams
-    // the next lane, so the reduction keeps both engines busy and a lane is
-    // never read while its own transfer is still in flight.
+    // The lanes of one row tile are folded one after another into a fp32 running
+    // total. Each lane travels through the queue, so its own transfer is retired
+    // before the fold reads it and the next lane can already be streaming while
+    // the vector engine works on the current one.
     __aicore__ inline void ReduceRows() {
         const uint32_t rowEnd = MinU32(RowBegin() + info_.rowTile, info_.rowTotal);
         for (uint32_t row = RowBegin(); row < rowEnd; ++row) {
