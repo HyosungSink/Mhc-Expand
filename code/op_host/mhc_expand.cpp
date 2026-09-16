@@ -7,7 +7,7 @@
 
 namespace {
 constexpr uint32_t MHC_TILE_MIN = 1024;
-constexpr uint32_t MHC_TILE_MAX = 512;
+constexpr uint32_t MHC_TILE_MAX = 4096;
 constexpr uint32_t MHC_UB_BUDGET = 160 * 1024;
 }  // namespace
 
