@@ -100,6 +100,30 @@ private:
         }
     }
 
+    // GM -> UB：一次读入 rows*mult_ 个数据块，块内连续，块间按 rowLen_ 跨步。
+    __aicore__ inline void LoadLanes(const AscendC::LocalTensor<DT_X> &dst, int64_t offset,
+                                     uint32_t rows, uint32_t cols)
+    {
+        const uint32_t blocks = rows * mult_;
+        if constexpr (IS_ALIGNED) {
+            if (cols == rowLen_) {
+                AscendC::DataCopy(dst, xGm_[offset], blocks * cols);
+            } else {
+                const AscendC::DataCopyParams params(
+                    static_cast<uint16_t>(blocks),
+                    static_cast<uint16_t>(cols * sizeof(DT_X) / MHC_BLOCK_BYTES),
+                    static_cast<uint16_t>((rowLen_ - cols) * sizeof(DT_X) / MHC_BLOCK_BYTES), 0U);
+                AscendC::DataCopy(dst, xGm_[offset], params);
+            }
+        } else {
+            const AscendC::DataCopyExtParams params(
+                static_cast<uint16_t>(blocks), cols * sizeof(DT_X),
+                (rowLen_ - cols) * sizeof(DT_X), 0U, 0U);
+            AscendC::DataCopyPadExtParams<DT_X> pad;
+            AscendC::DataCopyPad(dst, xGm_[offset], params, pad);
+        }
+    }
+
     // UB -> GM：行内连续，行间按 gmPitch 跨步。
     __aicore__ inline void StoreTile(int64_t offset, const AscendC::LocalTensor<DT_X> &src,
                                      uint32_t rows, uint32_t cols, uint32_t gmPitch)
@@ -288,18 +312,20 @@ private:
             uint32_t colBase = 0U;
             unit += Locate(unit, rows, cols, rowBase, colBase);
             AscendC::LocalTensor<DT_X> in = inAll[slot * groupElems];
-            AscendC::DataCopy(in, xGm_[static_cast<int64_t>(rowBase) * mult_ * rowLen_],
-                              rows * mult_ * rowLen_);
+            LoadLanes(in, static_cast<int64_t>(rowBase) * mult_ * rowLen_ + colBase, rows, cols);
             loaded.SetFlag(event);
             loaded.WaitFlag(event);
+            // DataCopy/DataCopyPad 把每个数据块按 32B 对齐落在 UB 上，lane 间距按此计算。
+            const uint32_t lanePitch =
+                IS_ALIGNED ? cols : ((cols + elemsPerBlock - 1U) / elemsPerBlock) * elemsPerBlock;
             for (uint32_t row = 0U; row < rows; ++row) {
-                const uint32_t lanes = row * mult_ * rowLen_;
-                const uint32_t sink = row * rowLen_;
-                AscendC::Cast(acc[sink], in[lanes], AscendC::RoundMode::CAST_NONE, rowLen_);
+                const uint32_t lanes = row * mult_ * lanePitch;
+                const uint32_t sink = row * cols;
+                AscendC::Cast(acc[sink], in[lanes], AscendC::RoundMode::CAST_NONE, cols);
                 for (uint32_t lane = 1U; lane < mult_; ++lane) {
-                    AscendC::Cast(tmp, in[lanes + lane * rowLen_], AscendC::RoundMode::CAST_NONE,
-                                  rowLen_);
-                    AscendC::Add(acc[sink], acc[sink], tmp, rowLen_);
+                    AscendC::Cast(tmp, in[lanes + lane * lanePitch], AscendC::RoundMode::CAST_NONE,
+                                  cols);
+                    AscendC::Add(acc[sink], acc[sink], tmp, cols);
                 }
             }
             inFree.SetFlag(event);
@@ -307,10 +333,10 @@ private:
                 outFree.WaitFlag(event);
             }
             AscendC::LocalTensor<DT_X> out = outAll[slot * stageElems_];
-            AscendC::Cast(out, acc, AscendC::RoundMode::CAST_RINT, rows * rowLen_);
+            AscendC::Cast(out, acc, AscendC::RoundMode::CAST_RINT, rows * cols);
             reduced.SetFlag(event);
             reduced.WaitFlag(event);
-            AscendC::DataCopy(oGm_[static_cast<int64_t>(rowBase) * rowLen_], out, rows * rowLen_);
+            StoreTile(static_cast<int64_t>(rowBase) * rowLen_ + colBase, out, rows, cols, rowLen_);
             outFree.SetFlag(event);
         }
         Drain(inFree, index);
