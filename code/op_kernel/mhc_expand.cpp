@@ -44,8 +44,8 @@ public:
         // A vector store covers whole blocks, so a scratch tile is sized for the
         // block aligned length of a tile, never for its payload alone.
         const uint32_t tileBytes = BlockAligned(info.tileLen) * MHC_ELEM_BYTES;
-        pipe_.InitBuffer(inQue_, 2, AlignUp(tileBytes));
-        pipe_.InitBuffer(outQue_, 2, AlignUp(tileBytes));
+        pipe_.InitBuffer(inQue_, 3, AlignUp(tileBytes));
+        pipe_.InitBuffer(outQue_, 3, AlignUp(tileBytes));
         if constexpr (BACKWARD != 0) {
             pipe_.InitBuffer(laneQue_, 4, AlignUp(tileBytes));
             pipe_.InitBuffer(wideBuf_, AlignUp(info.tileLen * static_cast<uint32_t>(sizeof(DT_F))));
@@ -198,8 +198,8 @@ private:
 
     MhcExpandTilingData info_;
     TPipe pipe_;
-    TQue<QuePosition::VECIN, 2> inQue_;
-    TQue<QuePosition::VECOUT, 2> outQue_;
+    TQue<QuePosition::VECIN, 3> inQue_;
+    TQue<QuePosition::VECOUT, 3> outQue_;
     TQue<QuePosition::VECIN, 4> laneQue_;
     TBuf<QuePosition::VECCALC> wideBuf_;
     TBuf<QuePosition::VECCALC> accBuf_;
