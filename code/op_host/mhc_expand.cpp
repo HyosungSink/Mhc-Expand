@@ -159,6 +159,7 @@ namespace optiling {
 
             // 前向把 laneGroup 份副本先在 UB 内排好，MTE3 就能按 laneGroup*D 连续写出；
             // 反向则一次读入 laneGroup 份梯度，把跨 lane 的跳读并成一次连续搬运。
+            const uint64_t plainRows = maxRows;
             uint64_t laneGroup = 1U;
             if (backward && alignedRow && colTiles == 1U && mult > 1 &&
                 colCount * (static_cast<uint64_t>(mult) + 3U) <= BACKWARD_GROUP_ELEMS) {
@@ -188,7 +189,6 @@ namespace optiling {
                     break;
                 }
             }
-            const uint64_t plainRows = maxRows;
             if (!backward && laneGroup > 1U) {
                 maxRows = FORWARD_REPLICA_ELEMS / (colCount * (1U + laneGroup));
                 if (maxRows == 0U) {
@@ -221,8 +221,8 @@ namespace optiling {
             if (colTiles == 1U) {
                 const uint64_t busiest = unitsPerCore + ((tailUnits != 0U) ? 1U : 0U);
                 uint64_t chunks = CeilDiv(busiest, maxRows);
-                // 副本路径多一级 V 流水，核内 tile 太少时填不满流水，退回直写。
-                if (!backward && laneGroup > 1U && chunks < MIN_REPLICA_CHUNKS) {
+                // 合并路径让每个 tile 变大，核内 tile 太少时流水填不满，退回逐份搬运。
+                if (laneGroup > 1U && chunks < MIN_REPLICA_CHUNKS) {
                     laneGroup = 1U;
                     maxRows = plainRows;
                     chunks = CeilDiv(busiest, maxRows);
