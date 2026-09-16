@@ -14,6 +14,7 @@ constexpr uint64_t BACKWARD_STAGE_ELEMS = 10240U; // 反向：lane/累加/输出
 constexpr uint64_t MIN_TILE_ELEMS = 2048U;        // 单个 tile 的元素下限，用于收敛小形状的核数
 constexpr uint64_t FORWARD_REPLICA_ELEMS = 45056U; // 前向副本路径：输入加副本的单份元素上限
 constexpr uint64_t MIN_REPLICA_CHUNKS = 3U;        // 副本路径至少需要的核内 tile 数
+constexpr uint64_t LAUNCH_SWEET_BLOCKS = 8U;       // 核数低于该值时启动开销反而更高
 constexpr uint64_t BACKWARD_GROUP_ELEMS = 45056U;  // 反向合并读取：单份暂存的元素上限
 constexpr int64_t DEFAULT_MULT = 2;
 
@@ -206,6 +207,11 @@ namespace optiling {
                 denseUnits = CeilDiv(MIN_TILE_ELEMS, pitch);
             }
             uint64_t blocks = CeilDiv(totalUnits, denseUnits);
+            // 实测启动开销在 1~5 个核时反而高于 8~10 个核，核数不足时补到甜点区间，
+            // 多出来的核没有工作单元会直接返回。
+            if (blocks < LAUNCH_SWEET_BLOCKS) {
+                blocks = LAUNCH_SWEET_BLOCKS;
+            }
             if (blocks > coreNum) {
                 blocks = coreNum;
             }
