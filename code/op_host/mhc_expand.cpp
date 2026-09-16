@@ -151,10 +151,10 @@ namespace optiling {
                     maxRows = MAX_BLOCK_COUNT;
                 }
             } else {
-                tileCols = (budget / elemsPerBlock) * elemsPerBlock;
-                if (tileCols == 0U) {
-                    tileCols = elemsPerBlock;
-                }
+                const uint64_t maxCols = (budget / elemsPerBlock) * elemsPerBlock;
+                colTiles = CeilDiv(colCount, (maxCols == 0U) ? elemsPerBlock : maxCols);
+                // 列块取等分值，避免最后一块明显偏小而拖慢尾部搬运。
+                tileCols = CeilDiv(CeilDiv(colCount, colTiles), elemsPerBlock) * elemsPerBlock;
                 colTiles = CeilDiv(colCount, tileCols);
                 ubPitch = tileCols;
             }
