@@ -14,6 +14,7 @@ constexpr uint64_t BACKWARD_STAGE_ELEMS = 10240U; // 反向：lane/累加/输出
 constexpr uint64_t MIN_TILE_ELEMS = 2048U;        // 单个 tile 的元素下限，用于收敛小形状的核数
 constexpr uint64_t FORWARD_REPLICA_ELEMS = 45056U; // 前向副本路径：输入加副本的单份元素上限
 constexpr uint64_t MIN_REPLICA_CHUNKS = 3U;        // 副本路径至少需要的核内 tile 数
+constexpr uint64_t BACKWARD_GROUP_ELEMS = 45056U;  // 反向合并读取：单份暂存的元素上限
 constexpr int64_t DEFAULT_MULT = 2;
 
 inline uint64_t CeilDiv(uint64_t value, uint64_t divisor)
@@ -156,8 +157,21 @@ namespace optiling {
                 ubPitch = tileCols;
             }
 
-            // 前向把 repLanes 份副本先在 UB 内排好，MTE3 就能按 repLanes*D 连续写出。
-            uint64_t repLanes = 1U;
+            // 前向把 laneGroup 份副本先在 UB 内排好，MTE3 就能按 laneGroup*D 连续写出；
+            // 反向则一次读入 laneGroup 份梯度，把跨 lane 的跳读并成一次连续搬运。
+            uint64_t laneGroup = 1U;
+            if (backward && alignedRow && colTiles == 1U && mult > 1 &&
+                colCount * (static_cast<uint64_t>(mult) + 3U) <= BACKWARD_GROUP_ELEMS) {
+                laneGroup = static_cast<uint64_t>(mult);
+                maxRows = (BACKWARD_GROUP_ELEMS - colCount) /
+                          (colCount * (static_cast<uint64_t>(mult) + 2U));
+                if (maxRows == 0U) {
+                    maxRows = 1U;
+                }
+                if (maxRows > MAX_BLOCK_COUNT) {
+                    maxRows = MAX_BLOCK_COUNT;
+                }
+            }
             if (!backward && alignedRow && colTiles == 1U && mult > 1) {
                 for (uint64_t candidate = static_cast<uint64_t>(mult); candidate >= 2U; --candidate) {
                     if (static_cast<uint64_t>(mult) % candidate != 0U) {
@@ -170,13 +184,13 @@ namespace optiling {
                         MAX_GAP_BLOCKS) {
                         continue;
                     }
-                    repLanes = candidate;
+                    laneGroup = candidate;
                     break;
                 }
             }
             const uint64_t plainRows = maxRows;
-            if (repLanes > 1U) {
-                maxRows = FORWARD_REPLICA_ELEMS / (colCount * (1U + repLanes));
+            if (!backward && laneGroup > 1U) {
+                maxRows = FORWARD_REPLICA_ELEMS / (colCount * (1U + laneGroup));
                 if (maxRows == 0U) {
                     maxRows = 1U;
                 }
@@ -208,8 +222,8 @@ namespace optiling {
                 const uint64_t busiest = unitsPerCore + ((tailUnits != 0U) ? 1U : 0U);
                 uint64_t chunks = CeilDiv(busiest, maxRows);
                 // 副本路径多一级 V 流水，核内 tile 太少时填不满流水，退回直写。
-                if (repLanes > 1U && chunks < MIN_REPLICA_CHUNKS) {
-                    repLanes = 1U;
+                if (!backward && laneGroup > 1U && chunks < MIN_REPLICA_CHUNKS) {
+                    laneGroup = 1U;
                     maxRows = plainRows;
                     chunks = CeilDiv(busiest, maxRows);
                 }
@@ -218,7 +232,7 @@ namespace optiling {
                     tileRows = 1U;
                 }
             } else {
-                repLanes = 1U;
+                laneGroup = 1U;
             }
 
             tiling->rowLen = static_cast<uint32_t>(cols);
@@ -230,7 +244,7 @@ namespace optiling {
             tiling->unitsPerCore = static_cast<uint32_t>(unitsPerCore);
             tiling->tailUnits = static_cast<uint32_t>(tailUnits);
             tiling->ubPitch = static_cast<uint32_t>(ubPitch);
-            tiling->repLanes = static_cast<uint32_t>(repLanes);
+            tiling->laneGroup = static_cast<uint32_t>(laneGroup);
         } else {
             tiling->rowLen = 0U;
             tiling->mult = static_cast<uint32_t>(mult);
@@ -241,7 +255,7 @@ namespace optiling {
             tiling->unitsPerCore = 0U;
             tiling->tailUnits = 0U;
             tiling->ubPitch = static_cast<uint32_t>(elemsPerBlock);
-            tiling->repLanes = 1U;
+            tiling->laneGroup = 1U;
         }
 
         uint32_t dtypeKey = static_cast<uint32_t>(dtypeX);

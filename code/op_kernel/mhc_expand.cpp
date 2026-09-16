@@ -23,7 +23,7 @@ public:
         tileCols_ = tiling.tileCols;
         colTiles_ = tiling.colTiles;
         ubPitch_ = tiling.ubPitch;
-        repLanes_ = tiling.repLanes;
+        laneGroup_ = tiling.laneGroup;
         stageElems_ = tileRows_ * ubPitch_;
         const uint32_t block = static_cast<uint32_t>(AscendC::GetBlockIdx());
         unitStart_ = block * tiling.unitsPerCore + ((block < tiling.tailUnits) ? block : tiling.tailUnits);
@@ -38,8 +38,12 @@ public:
             return;
         }
         if constexpr (IS_BACKWARD) {
-            Reduce();
-        } else if (repLanes_ > 1U) {
+            if (laneGroup_ > 1U) {
+                ReduceGrouped();
+            } else {
+                Reduce();
+            }
+        } else if (laneGroup_ > 1U) {
             ExpandReplicated();
         } else {
             Expand();
@@ -154,11 +158,11 @@ private:
         Drain(reuse, index);
     }
 
-    // 先在 UB 内排出 repLanes 份副本，再按 repLanes*D 的连续块写回，
-    // 把 MTE3 的写出粒度从一份副本放大到 repLanes 份。
+    // 先在 UB 内排出 laneGroup 份副本，再按 laneGroup*D 的连续块写回，
+    // 把 MTE3 的写出粒度从一份副本放大到 laneGroup 份。
     __aicore__ inline void ExpandReplicated()
     {
-        const uint32_t outElems = stageElems_ * repLanes_;
+        const uint32_t outElems = stageElems_ * laneGroup_;
         AscendC::TBuf<AscendC::TPosition::VECCALC> inStage;
         AscendC::TBuf<AscendC::TPosition::VECCALC> outStage;
         pipe_.InitBuffer(inStage, stageElems_ * sizeof(DT_X) * 2U);
@@ -171,8 +175,8 @@ private:
         AscendC::TQueSync<PIPE_MTE3, PIPE_V> outFree;
 
         const uint32_t laneBlocks = rowLen_ * sizeof(DT_X) / MHC_BLOCK_BYTES;
-        const uint32_t groupBlocks = laneBlocks * repLanes_;
-        const uint32_t groups = mult_ / repLanes_;
+        const uint32_t groupBlocks = laneBlocks * laneGroup_;
+        const uint32_t groups = mult_ / laneGroup_;
         uint32_t index = 0U;
         for (uint32_t unit = unitStart_; unit < unitEnd_; ++index) {
             const uint32_t slot = index & 1U;
@@ -193,7 +197,7 @@ private:
                 outFree.WaitFlag(event);
             }
             AscendC::LocalTensor<DT_X> out = outAll[slot * outElems];
-            for (uint32_t lane = 0U; lane < repLanes_; ++lane) {
+            for (uint32_t lane = 0U; lane < laneGroup_; ++lane) {
                 if (rows == 1U) {
                     AscendC::DataCopy(out[lane * rowLen_], in, rowLen_);
                 } else {
@@ -212,12 +216,77 @@ private:
             } else {
                 AscendC::DataCopyParams emit(
                     static_cast<uint16_t>(rows), static_cast<uint16_t>(groupBlocks), 0U,
-                    static_cast<uint16_t>(laneBlocks * (mult_ - repLanes_)));
+                    static_cast<uint16_t>(laneBlocks * (mult_ - laneGroup_)));
                 for (uint32_t group = 0U; group < groups; ++group) {
-                    AscendC::DataCopy(oGm_[base + static_cast<int64_t>(group) * repLanes_ * rowLen_],
+                    AscendC::DataCopy(oGm_[base + static_cast<int64_t>(group) * laneGroup_ * rowLen_],
                                       out, emit);
                 }
             }
+            outFree.SetFlag(event);
+        }
+        Drain(inFree, index);
+        Drain(outFree, index);
+    }
+
+    // 一次把 laneGroup 份梯度连续读进 UB，再在 FP32 上逐 lane 累加，
+    // 把原来跨 lane 的跳读并成一次连续搬运。
+    __aicore__ inline void ReduceGrouped()
+    {
+        const uint32_t groupElems = stageElems_ * laneGroup_;
+        AscendC::TBuf<AscendC::TPosition::VECCALC> inStage;
+        AscendC::TBuf<AscendC::TPosition::VECCALC> accBuf;
+        AscendC::TBuf<AscendC::TPosition::VECCALC> tmpBuf;
+        AscendC::TBuf<AscendC::TPosition::VECCALC> outStage;
+        pipe_.InitBuffer(inStage, groupElems * sizeof(DT_X) * 2U);
+        pipe_.InitBuffer(accBuf, stageElems_ * sizeof(float));
+        pipe_.InitBuffer(tmpBuf, ubPitch_ * sizeof(float));
+        pipe_.InitBuffer(outStage, stageElems_ * sizeof(DT_X) * 2U);
+        AscendC::LocalTensor<DT_X> inAll = inStage.Get<DT_X>();
+        AscendC::LocalTensor<float> acc = accBuf.Get<float>();
+        AscendC::LocalTensor<float> tmp = tmpBuf.Get<float>();
+        AscendC::LocalTensor<DT_X> outAll = outStage.Get<DT_X>();
+
+        AscendC::TQueSync<PIPE_MTE2, PIPE_V> loaded;
+        AscendC::TQueSync<PIPE_V, PIPE_MTE2> inFree;
+        AscendC::TQueSync<PIPE_V, PIPE_MTE3> reduced;
+        AscendC::TQueSync<PIPE_MTE3, PIPE_V> outFree;
+
+        uint32_t index = 0U;
+        for (uint32_t unit = unitStart_; unit < unitEnd_; ++index) {
+            const uint32_t slot = index & 1U;
+            const AscendC::TEventID event = static_cast<AscendC::TEventID>(slot);
+            if (index >= 2U) {
+                inFree.WaitFlag(event);
+            }
+            uint32_t rows = 0U;
+            uint32_t cols = 0U;
+            uint32_t rowBase = 0U;
+            uint32_t colBase = 0U;
+            unit += Locate(unit, rows, cols, rowBase, colBase);
+            AscendC::LocalTensor<DT_X> in = inAll[slot * groupElems];
+            AscendC::DataCopy(in, xGm_[static_cast<int64_t>(rowBase) * mult_ * rowLen_],
+                              rows * mult_ * rowLen_);
+            loaded.SetFlag(event);
+            loaded.WaitFlag(event);
+            for (uint32_t row = 0U; row < rows; ++row) {
+                const uint32_t lanes = row * mult_ * rowLen_;
+                const uint32_t sink = row * rowLen_;
+                AscendC::Cast(acc[sink], in[lanes], AscendC::RoundMode::CAST_NONE, rowLen_);
+                for (uint32_t lane = 1U; lane < mult_; ++lane) {
+                    AscendC::Cast(tmp, in[lanes + lane * rowLen_], AscendC::RoundMode::CAST_NONE,
+                                  rowLen_);
+                    AscendC::Add(acc[sink], acc[sink], tmp, rowLen_);
+                }
+            }
+            inFree.SetFlag(event);
+            if (index >= 2U) {
+                outFree.WaitFlag(event);
+            }
+            AscendC::LocalTensor<DT_X> out = outAll[slot * stageElems_];
+            AscendC::Cast(out, acc, AscendC::RoundMode::CAST_RINT, rows * rowLen_);
+            reduced.SetFlag(event);
+            reduced.WaitFlag(event);
+            AscendC::DataCopy(oGm_[static_cast<int64_t>(rowBase) * rowLen_], out, rows * rowLen_);
             outFree.SetFlag(event);
         }
         Drain(inFree, index);
@@ -309,7 +378,7 @@ private:
     uint32_t tileCols_ = 0U;
     uint32_t colTiles_ = 0U;
     uint32_t ubPitch_ = 0U;
-    uint32_t repLanes_ = 1U;
+    uint32_t laneGroup_ = 1U;
     uint32_t stageElems_ = 0U;
     uint32_t unitStart_ = 0U;
     uint32_t unitEnd_ = 0U;
