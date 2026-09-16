@@ -12,7 +12,7 @@ constexpr uint64_t MAX_GAP_BLOCKS = 65535U;
 constexpr uint64_t FORWARD_STAGE_ELEMS = 32768U;  // 前向：2 份暂存缓冲
 constexpr uint64_t UB_USABLE_BYTES = 184320U;      // 留出余量后可用于暂存的 UB 字节数
 constexpr uint64_t MIN_TILE_ELEMS = 2048U;        // 单个 tile 的元素下限，用于收敛小形状的核数
-constexpr uint64_t FORWARD_REPLICA_ELEMS = 45056U; // 前向副本路径：输入加副本的单份元素上限
+constexpr uint64_t FORWARD_REPLICA_ELEMS = 46080U; // 前向副本路径：单份暂存的元素上限
 constexpr uint64_t MIN_REPLICA_CHUNKS = 3U;        // 副本路径至少需要的核内 tile 数
 constexpr uint64_t LAUNCH_SWEET_BLOCKS = 8U;       // 核数低于该值时启动开销反而更高
 constexpr uint64_t LAUNCH_SNAP_ELEMS = 524288U;    // 低于该规模时启动开销主导，核数取 8 的整数倍
@@ -192,7 +192,7 @@ namespace optiling {
                     if (static_cast<uint64_t>(mult) % candidate != 0U) {
                         continue;
                     }
-                    if (colCount * (1U + candidate) > FORWARD_REPLICA_ELEMS) {
+                    if (colCount * candidate > FORWARD_REPLICA_ELEMS) {
                         continue;
                     }
                     if (((static_cast<uint64_t>(mult) - candidate) * colCount * elemSize) / BLOCK_BYTES >
@@ -204,7 +204,7 @@ namespace optiling {
                 }
             }
             if (!backward && laneGroup > 1U) {
-                maxRows = FORWARD_REPLICA_ELEMS / (colCount * (1U + laneGroup));
+                maxRows = FORWARD_REPLICA_ELEMS / (colCount * laneGroup);
                 if (maxRows == 0U) {
                     maxRows = 1U;
                 }

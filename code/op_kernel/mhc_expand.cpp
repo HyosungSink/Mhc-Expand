@@ -203,31 +203,32 @@ private:
         Drain(reuse, index);
     }
 
-    // 先在 UB 内排出 laneGroup 份副本，再按 laneGroup*D 的连续块写回，
-    // 把 MTE3 的写出粒度从一份副本放大到 laneGroup 份。
+    // 直接把 x 读进输出 tile 的第 0 份副本，再在 UB 内铺开其余副本，
+    // MTE3 就能按 laneGroup*D 的连续块写回，省掉一块暂存和两次同步。
     __aicore__ inline void ExpandReplicated()
     {
         const uint32_t outElems = stageElems_ * laneGroup_;
-        AscendC::TBuf<AscendC::TPosition::VECCALC> inStage;
         AscendC::TBuf<AscendC::TPosition::VECCALC> outStage;
-        pipe_.InitBuffer(inStage, stageElems_ * sizeof(DT_X) * 2U);
         pipe_.InitBuffer(outStage, outElems * sizeof(DT_X) * 2U);
-        AscendC::LocalTensor<DT_X> inAll = inStage.Get<DT_X>();
         AscendC::LocalTensor<DT_X> outAll = outStage.Get<DT_X>();
         AscendC::TQueSync<PIPE_MTE2, PIPE_V> loaded;
-        AscendC::TQueSync<PIPE_V, PIPE_MTE2> inFree;
         AscendC::TQueSync<PIPE_V, PIPE_MTE3> filled;
-        AscendC::TQueSync<PIPE_MTE3, PIPE_V> outFree;
+        AscendC::TQueSync<PIPE_MTE3, PIPE_MTE2> recycle;
 
         const uint32_t laneBlocks = rowLen_ * sizeof(DT_X) / MHC_BLOCK_BYTES;
         const uint32_t groupBlocks = laneBlocks * laneGroup_;
+        const uint32_t laneGap = groupBlocks - laneBlocks;
         const uint32_t groups = mult_ / laneGroup_;
         const uint32_t groupStride = laneGroup_ * rowLen_;
         const uint32_t rowStride = mult_ * rowLen_;
         // 整块 tile 的搬运参数在循环外构造，尾块只改 blockCount。
-        AscendC::DataCopyParams spread(static_cast<uint16_t>(tileRows_),
+        AscendC::DataCopyParams gather(static_cast<uint16_t>(tileRows_),
                                        static_cast<uint16_t>(laneBlocks), 0U,
-                                       static_cast<uint16_t>(groupBlocks - laneBlocks));
+                                       static_cast<uint16_t>(laneGap));
+        AscendC::DataCopyParams spread(static_cast<uint16_t>(tileRows_),
+                                       static_cast<uint16_t>(laneBlocks),
+                                       static_cast<uint16_t>(laneGap),
+                                       static_cast<uint16_t>(laneGap));
         AscendC::DataCopyParams emit(static_cast<uint16_t>(tileRows_),
                                      static_cast<uint16_t>(groupBlocks), 0U,
                                      static_cast<uint16_t>(laneBlocks * (mult_ - laneGroup_)));
@@ -236,29 +237,25 @@ private:
             const uint32_t slot = index & 1U;
             const AscendC::TEventID event = static_cast<AscendC::TEventID>(slot);
             if (index >= 2U) {
-                inFree.WaitFlag(event);
+                recycle.WaitFlag(event);
             }
             const uint32_t rowBase = unit;
             uint32_t rows = unitEnd_ - unit;
             if (rows > tileRows_) {
                 rows = tileRows_;
             } else {
+                gather.blockCount = static_cast<uint16_t>(rows);
                 spread.blockCount = static_cast<uint16_t>(rows);
                 emit.blockCount = static_cast<uint16_t>(rows);
             }
             unit += rows;
-            AscendC::LocalTensor<DT_X> in = inAll[slot * stageElems_];
-            AscendC::DataCopy(in, xGm_[static_cast<int64_t>(rowBase) * rowLen_], rows * rowLen_);
+            AscendC::LocalTensor<DT_X> out = outAll[slot * outElems];
+            AscendC::DataCopy(out, xGm_[static_cast<int64_t>(rowBase) * rowLen_], gather);
             loaded.SetFlag(event);
             loaded.WaitFlag(event);
-            if (index >= 2U) {
-                outFree.WaitFlag(event);
+            for (uint32_t lane = 1U; lane < laneGroup_; ++lane) {
+                AscendC::DataCopy(out[lane * rowLen_], out, spread);
             }
-            AscendC::LocalTensor<DT_X> out = outAll[slot * outElems];
-            for (uint32_t lane = 0U; lane < laneGroup_; ++lane) {
-                AscendC::DataCopy(out[lane * rowLen_], in, spread);
-            }
-            inFree.SetFlag(event);
             filled.SetFlag(event);
             filled.WaitFlag(event);
             const int64_t base = static_cast<int64_t>(rowBase) * rowStride;
@@ -270,10 +267,9 @@ private:
                                       emit);
                 }
             }
-            outFree.SetFlag(event);
+            recycle.SetFlag(event);
         }
-        Drain(inFree, index);
-        Drain(outFree, index);
+        Drain(recycle, index);
     }
 
     // 一次把 laneGroup 份梯度连续读进 UB，再在 FP32 上逐 lane 累加，
