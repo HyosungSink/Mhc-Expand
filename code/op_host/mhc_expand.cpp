@@ -11,7 +11,7 @@ constexpr uint64_t MAX_BLOCK_COUNT = 4095U;
 constexpr uint64_t MAX_GAP_BLOCKS = 65535U;
 constexpr uint64_t FORWARD_STAGE_ELEMS = 32768U;  // 前向：2 份暂存缓冲
 constexpr uint64_t BACKWARD_STAGE_ELEMS = 10240U; // 反向：lane/累加/输出共 16B 每元素
-constexpr uint64_t MIN_TILE_ELEMS = 1024U;        // 单个 tile 的元素下限，用于收敛小形状的核数
+constexpr uint64_t MIN_TILE_ELEMS = 4096U;        // 单个 tile 的元素下限，用于收敛小形状的核数
 constexpr int64_t DEFAULT_MULT = 2;
 
 inline uint64_t CeilDiv(uint64_t value, uint64_t divisor)
