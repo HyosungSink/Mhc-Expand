@@ -114,16 +114,18 @@ static ge::graphStatus TilingFunc(gert::TilingContext *context) {
             if (shape.GetDim(1) != multiplier) {
                 return ge::GRAPH_FAILED;
             }
+            // Backward reads S * multiplier rows and writes S rows, so the
+            // output rows of this direction are the S rows of the input stream.
             streams = shape.GetDim(0);
-            rows = static_cast<size_t>(streams) * static_cast<size_t>(multiplier);
+            rows = static_cast<size_t>(streams);
         } else {
             // In the rank-2 form the lanes of one row are adjacent, so the
             // operand only has to divide evenly into full rows.
             if (d <= 0 || elements % d != 0 || multiplier <= 0 || (elements / d) % multiplier != 0) {
                 return ge::GRAPH_FAILED;
             }
-            rows = static_cast<size_t>(elements / d);
             streams = elements / d / multiplier;
+            rows = static_cast<size_t>(streams);
         }
     } else {
         if (rank != 2) {
