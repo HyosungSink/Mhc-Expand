@@ -25,15 +25,15 @@ public:
         ubPitch_ = tiling.ubPitch;
         stageElems_ = tileRows_ * ubPitch_;
         const uint32_t block = static_cast<uint32_t>(AscendC::GetBlockIdx());
-        tileCount_ = tiling.tilesPerCore + ((block < tiling.tailTiles) ? 1U : 0U);
-        tileStart_ = block * tiling.tilesPerCore + ((block < tiling.tailTiles) ? block : tiling.tailTiles);
+        unitStart_ = block * tiling.unitsPerCore + ((block < tiling.tailUnits) ? block : tiling.tailUnits);
+        unitEnd_ = unitStart_ + tiling.unitsPerCore + ((block < tiling.tailUnits) ? 1U : 0U);
         xGm_.SetGlobalBuffer(reinterpret_cast<__gm__ DT_X *>(x));
         oGm_.SetGlobalBuffer(reinterpret_cast<__gm__ DT_X *>(o));
     }
 
     __aicore__ inline void Process()
     {
-        if (tileCount_ == 0U) {
+        if (unitEnd_ == unitStart_) {
             return;
         }
         if constexpr (IS_BACKWARD) {
@@ -44,26 +44,29 @@ public:
     }
 
 private:
-    // 把线性 tile 序号还原成行区间与列区间。
-    __aicore__ inline void Locate(uint32_t tile, uint32_t &rows, uint32_t &cols,
-                                  uint32_t &rowBase, uint32_t &colBase)
+    // 把当前工作单元展开成行区间与列区间，并返回本次消耗的单元数。
+    __aicore__ inline uint32_t Locate(uint32_t unit, uint32_t &rows, uint32_t &cols,
+                                      uint32_t &rowBase, uint32_t &colBase)
     {
-        uint32_t rowTile = tile;
-        uint32_t colTile = 0U;
-        if (colTiles_ != 1U) {
-            rowTile = tile / colTiles_;
-            colTile = tile - rowTile * colTiles_;
+        if (colTiles_ == 1U) {
+            rowBase = unit;
+            colBase = 0U;
+            cols = rowLen_;
+            rows = unitEnd_ - unit;
+            if (rows > tileRows_) {
+                rows = tileRows_;
+            }
+            return rows;
         }
-        rowBase = rowTile * tileRows_;
-        rows = tileRows_;
-        if (rowBase + rows > rowCount_) {
-            rows = rowCount_ - rowBase;
-        }
+        rowBase = unit / colTiles_;
+        const uint32_t colTile = unit - rowBase * colTiles_;
+        rows = 1U;
         colBase = colTile * tileCols_;
         cols = tileCols_;
         if (colBase + cols > rowLen_) {
             cols = rowLen_ - colBase;
         }
+        return 1U;
     }
 
     // GM -> UB：行内连续，行间按 rowLen_ 跨步。
@@ -121,7 +124,8 @@ private:
         AscendC::TQueSync<PIPE_MTE2, PIPE_MTE3> ready;
         AscendC::TQueSync<PIPE_MTE3, PIPE_MTE2> reuse;
 
-        for (uint32_t index = 0U; index < tileCount_; ++index) {
+        uint32_t index = 0U;
+        for (uint32_t unit = unitStart_; unit < unitEnd_; ++index) {
             const uint32_t slot = index & 1U;
             const AscendC::TEventID event = static_cast<AscendC::TEventID>(slot);
             if (index >= 2U) {
@@ -131,7 +135,7 @@ private:
             uint32_t cols = 0U;
             uint32_t rowBase = 0U;
             uint32_t colBase = 0U;
-            Locate(tileStart_ + index, rows, cols, rowBase, colBase);
+            unit += Locate(unit, rows, cols, rowBase, colBase);
             AscendC::LocalTensor<DT_X> tile = buffer[slot * stageElems_];
             const int64_t source = static_cast<int64_t>(rowBase) * rowLen_ + colBase;
             LoadTile(tile, source, rows, cols, rowLen_);
@@ -144,7 +148,7 @@ private:
             }
             reuse.SetFlag(event);
         }
-        Drain(reuse, tileCount_);
+        Drain(reuse, index);
     }
 
     __aicore__ inline void Reduce()
@@ -168,12 +172,13 @@ private:
         AscendC::TQueSync<PIPE_V, PIPE_MTE3> reduced;
         AscendC::TQueSync<PIPE_MTE3, PIPE_V> outFree;
 
-        for (uint32_t index = 0U; index < tileCount_; ++index) {
+        uint32_t index = 0U;
+        for (uint32_t unit = unitStart_; unit < unitEnd_; ++index) {
             uint32_t rows = 0U;
             uint32_t cols = 0U;
             uint32_t rowBase = 0U;
             uint32_t colBase = 0U;
-            Locate(tileStart_ + index, rows, cols, rowBase, colBase);
+            unit += Locate(unit, rows, cols, rowBase, colBase);
             const uint32_t elems = (rows > 1U) ? (rows * ubPitch_) : cols;
             const int64_t base = static_cast<int64_t>(rowBase) * mult_ * rowLen_ + colBase;
             for (uint32_t lane = 0U; lane < mult_; ++lane) {
@@ -208,7 +213,7 @@ private:
             StoreTile(static_cast<int64_t>(rowBase) * rowLen_ + colBase, out, rows, cols, rowLen_);
             outFree.SetFlag(event);
         }
-        Drain(outFree, tileCount_);
+        Drain(outFree, index);
     }
 
     // 收尾时补齐尚未配对的 WaitFlag，保证同步标志位归零。
@@ -232,8 +237,8 @@ private:
     uint32_t colTiles_ = 0U;
     uint32_t ubPitch_ = 0U;
     uint32_t stageElems_ = 0U;
-    uint32_t tileCount_ = 0U;
-    uint32_t tileStart_ = 0U;
+    uint32_t unitStart_ = 0U;
+    uint32_t unitEnd_ = 0U;
 };
 }  // namespace
 

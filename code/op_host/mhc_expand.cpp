@@ -130,12 +130,13 @@ namespace optiling {
             const uint64_t pitch = alignedRow ? colCount : CeilDiv(colCount, elemsPerBlock) * elemsPerBlock;
             const uint64_t budget = backward ? BACKWARD_STAGE_ELEMS : FORWARD_STAGE_ELEMS;
 
-            uint64_t tileRows = 1U;
+            // 工作单元：列未切分时是一整行，列切分后是一行中的一个列块。
             uint64_t tileCols = colCount;
             uint64_t colTiles = 1U;
             uint64_t ubPitch = pitch;
+            uint64_t maxRows = 1U;
             if (pitch <= budget) {
-                uint64_t maxRows = budget / pitch;
+                maxRows = budget / pitch;
                 // 多行搬运依赖 uint16 的 blockLen/Gap 字段，越界时退回单行。
                 if (!alignedRow || (colCount * elemSize) / BLOCK_BYTES > MAX_GAP_BLOCKS ||
                     (static_cast<uint64_t>(mult - 1) * colCount * elemSize) / BLOCK_BYTES > MAX_GAP_BLOCKS) {
@@ -143,16 +144,6 @@ namespace optiling {
                 }
                 if (maxRows > MAX_BLOCK_COUNT) {
                     maxRows = MAX_BLOCK_COUNT;
-                }
-                const uint64_t rowsPerCore = CeilDiv(static_cast<uint64_t>(rows), coreNum);
-                tileRows = (maxRows < rowsPerCore) ? maxRows : rowsPerCore;
-                // 小形状下每个核的固定开销主导耗时，抬高单 tile 的下限来收敛核数。
-                const uint64_t denseRows = CeilDiv(MIN_TILE_ELEMS, pitch);
-                if (tileRows < denseRows) {
-                    tileRows = (maxRows < denseRows) ? maxRows : denseRows;
-                }
-                if (tileRows == 0U) {
-                    tileRows = 1U;
                 }
             } else {
                 tileCols = (budget / elemsPerBlock) * elemsPerBlock;
@@ -162,20 +153,43 @@ namespace optiling {
                 colTiles = CeilDiv(colCount, tileCols);
                 ubPitch = tileCols;
             }
-            const uint64_t rowTiles = CeilDiv(static_cast<uint64_t>(rows), tileRows);
-            const uint64_t totalTiles = rowTiles * colTiles;
-            blockDim = static_cast<uint32_t>((totalTiles < coreNum) ? totalTiles : coreNum);
-            if (blockDim == 0U) {
-                blockDim = 1U;
+
+            // 小形状下每个核的固定开销主导耗时，给每个核设一个工作量下限来收敛核数。
+            const uint64_t totalUnits = static_cast<uint64_t>(rows) * colTiles;
+            uint64_t denseUnits = 1U;
+            if (colTiles == 1U) {
+                denseUnits = CeilDiv(MIN_TILE_ELEMS, pitch);
             }
+            uint64_t blocks = CeilDiv(totalUnits, denseUnits);
+            if (blocks > coreNum) {
+                blocks = coreNum;
+            }
+            if (blocks == 0U) {
+                blocks = 1U;
+            }
+            blockDim = static_cast<uint32_t>(blocks);
+
+            // 工作单元按核均分，最忙的核只比平均多一个单元。
+            const uint64_t unitsPerCore = totalUnits / blocks;
+            const uint64_t tailUnits = totalUnits % blocks;
+            uint64_t tileRows = 1U;
+            if (colTiles == 1U) {
+                const uint64_t busiest = unitsPerCore + ((tailUnits != 0U) ? 1U : 0U);
+                const uint64_t chunks = CeilDiv(busiest, maxRows);
+                tileRows = (chunks == 0U) ? 1U : CeilDiv(busiest, chunks);
+                if (tileRows == 0U) {
+                    tileRows = 1U;
+                }
+            }
+
             tiling->rowLen = static_cast<uint32_t>(cols);
             tiling->mult = static_cast<uint32_t>(mult);
             tiling->rowCount = static_cast<uint32_t>(rows);
             tiling->tileRows = static_cast<uint32_t>(tileRows);
             tiling->tileCols = static_cast<uint32_t>(tileCols);
             tiling->colTiles = static_cast<uint32_t>(colTiles);
-            tiling->tilesPerCore = static_cast<uint32_t>(totalTiles / blockDim);
-            tiling->tailTiles = static_cast<uint32_t>(totalTiles % blockDim);
+            tiling->unitsPerCore = static_cast<uint32_t>(unitsPerCore);
+            tiling->tailUnits = static_cast<uint32_t>(tailUnits);
             tiling->ubPitch = static_cast<uint32_t>(ubPitch);
         } else {
             tiling->rowLen = 0U;
@@ -184,9 +198,9 @@ namespace optiling {
             tiling->tileRows = 1U;
             tiling->tileCols = 1U;
             tiling->colTiles = 1U;
-            tiling->tilesPerCore = 0U;
-            tiling->tailTiles = 0U;
-            tiling->ubPitch = elemsPerBlock;
+            tiling->unitsPerCore = 0U;
+            tiling->tailUnits = 0U;
+            tiling->ubPitch = static_cast<uint32_t>(elemsPerBlock);
         }
 
         uint32_t dtypeKey = static_cast<uint32_t>(dtypeX);
