@@ -118,8 +118,8 @@ private:
         AscendC::TBuf<AscendC::TPosition::VECCALC> stage;
         pipe_.InitBuffer(stage, stageElems_ * sizeof(DT_X) * 2U);
         AscendC::LocalTensor<DT_X> buffer = stage.Get<DT_X>();
-        AscendC::TQueSync<AscendC::PIPE_MTE2, AscendC::PIPE_MTE3> ready;
-        AscendC::TQueSync<AscendC::PIPE_MTE3, AscendC::PIPE_MTE2> reuse;
+        AscendC::TQueSync<PIPE_MTE2, PIPE_MTE3> ready;
+        AscendC::TQueSync<PIPE_MTE3, PIPE_MTE2> reuse;
 
         for (uint32_t index = 0U; index < tileCount_; ++index) {
             const uint32_t slot = index & 1U;
@@ -163,10 +163,10 @@ private:
         AscendC::LocalTensor<float> tmp = tmpBuf.Get<float>();
         AscendC::LocalTensor<DT_X> outs = outBuf.Get<DT_X>();
 
-        AscendC::TQueSync<AscendC::PIPE_MTE2, AscendC::PIPE_V> loaded;
-        AscendC::TQueSync<AscendC::PIPE_V, AscendC::PIPE_MTE2> laneFree;
-        AscendC::TQueSync<AscendC::PIPE_V, AscendC::PIPE_MTE3> reduced;
-        AscendC::TQueSync<AscendC::PIPE_MTE3, AscendC::PIPE_V> outFree;
+        AscendC::TQueSync<PIPE_MTE2, PIPE_V> loaded;
+        AscendC::TQueSync<PIPE_V, PIPE_MTE2> laneFree;
+        AscendC::TQueSync<PIPE_V, PIPE_MTE3> reduced;
+        AscendC::TQueSync<PIPE_MTE3, PIPE_V> outFree;
 
         for (uint32_t index = 0U; index < tileCount_; ++index) {
             uint32_t rows = 0U;
