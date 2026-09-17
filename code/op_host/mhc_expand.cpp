@@ -258,10 +258,8 @@ namespace optiling {
 
             tiling->rowLen = static_cast<uint32_t>(cols);
             tiling->mult = static_cast<uint32_t>(mult);
-            tiling->rowCount = static_cast<uint32_t>(rows);
             tiling->tileRows = static_cast<uint32_t>(tileRows);
             tiling->tileCols = static_cast<uint32_t>(tileCols);
-            tiling->colTiles = static_cast<uint32_t>(colTiles);
             tiling->unitsPerCore = static_cast<uint32_t>(unitsPerCore);
             tiling->tailUnits = static_cast<uint32_t>(tailUnits);
             tiling->ubPitch = static_cast<uint32_t>(ubPitch);
@@ -269,10 +267,8 @@ namespace optiling {
         } else {
             tiling->rowLen = 0U;
             tiling->mult = static_cast<uint32_t>(mult);
-            tiling->rowCount = 0U;
             tiling->tileRows = 1U;
             tiling->tileCols = 1U;
-            tiling->colTiles = 1U;
             tiling->unitsPerCore = 0U;
             tiling->tailUnits = 0U;
             tiling->ubPitch = static_cast<uint32_t>(elemsPerBlock);

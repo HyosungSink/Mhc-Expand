@@ -14,14 +14,16 @@ class KernelMhcExpand {
 public:
     __aicore__ inline KernelMhcExpand() {}
 
-    __aicore__ inline void Init(GM_ADDR x, GM_ADDR o, const MhcExpandTilingData &tiling)
+    __aicore__ inline void Init(GM_ADDR x, GM_ADDR o, const MhcExpandTilingData &tiling, AscendC::TPipe *pipeIn)
     {
+        pipe_ = pipeIn;
         rowLen_ = tiling.rowLen;
         mult_ = tiling.mult;
-        rowCount_ = tiling.rowCount;
         tileRows_ = tiling.tileRows;
         tileCols_ = tiling.tileCols;
-        colTiles_ = tiling.colTiles;
+        // colTiles 不随 TilingData 传输：按 Host 侧同一 CeilDiv 公式在 Kernel 侧重算，
+        // 换 4 字节 Scalar 加减除来省一次 32B GM 搬运。
+        colTiles_ = (rowLen_ + tileCols_ - 1U) / tileCols_;
         ubPitch_ = tiling.ubPitch;
         laneGroup_ = tiling.laneGroup;
         stageElems_ = tileRows_ * ubPitch_;
@@ -150,7 +152,7 @@ private:
     __aicore__ inline void Expand()
     {
         AscendC::TBuf<AscendC::TPosition::VECCALC> stage;
-        pipe_.InitBuffer(stage, stageElems_ * sizeof(DT_X) * 2U);
+        pipe_->InitBuffer(stage, stageElems_ * sizeof(DT_X) * 2U);
         AscendC::LocalTensor<DT_X> buffer = stage.Get<DT_X>();
         AscendC::TQueSync<PIPE_MTE2, PIPE_MTE3> ready;
         AscendC::TQueSync<PIPE_MTE3, PIPE_MTE2> reuse;
@@ -209,7 +211,7 @@ private:
     {
         const uint32_t outElems = stageElems_ * laneGroup_;
         AscendC::TBuf<AscendC::TPosition::VECCALC> outStage;
-        pipe_.InitBuffer(outStage, outElems * sizeof(DT_X) * 2U);
+        pipe_->InitBuffer(outStage, outElems * sizeof(DT_X) * 2U);
         AscendC::LocalTensor<DT_X> outAll = outStage.Get<DT_X>();
         AscendC::TQueSync<PIPE_MTE2, PIPE_V> loaded;
         AscendC::TQueSync<PIPE_V, PIPE_MTE3> filled;
@@ -282,10 +284,10 @@ private:
         AscendC::TBuf<AscendC::TPosition::VECCALC> accBuf;
         AscendC::TBuf<AscendC::TPosition::VECCALC> tmpBuf;
         AscendC::TBuf<AscendC::TPosition::VECCALC> outStage;
-        pipe_.InitBuffer(inStage, groupElems * sizeof(DT_X) * 2U);
-        pipe_.InitBuffer(accBuf, stageElems_ * sizeof(float));
-        pipe_.InitBuffer(tmpBuf, ubPitch_ * sizeof(float));
-        pipe_.InitBuffer(outStage, stageElems_ * sizeof(DT_X) * 2U);
+        pipe_->InitBuffer(inStage, groupElems * sizeof(DT_X) * 2U);
+        pipe_->InitBuffer(accBuf, stageElems_ * sizeof(float));
+        pipe_->InitBuffer(tmpBuf, ubPitch_ * sizeof(float));
+        pipe_->InitBuffer(outStage, stageElems_ * sizeof(DT_X) * 2U);
         AscendC::LocalTensor<DT_X> inAll = inStage.Get<DT_X>();
         AscendC::LocalTensor<float> acc = accBuf.Get<float>();
         AscendC::LocalTensor<float> tmp = tmpBuf.Get<float>();
@@ -347,10 +349,10 @@ private:
         AscendC::TBuf<AscendC::TPosition::VECCALC> accBuf;
         AscendC::TBuf<AscendC::TPosition::VECCALC> tmpBuf;
         AscendC::TBuf<AscendC::TPosition::VECCALC> outBuf;
-        pipe_.InitBuffer(laneBuf, stageBytes * 2U);
-        pipe_.InitBuffer(accBuf, stageElems_ * sizeof(float));
-        pipe_.InitBuffer(tmpBuf, stageElems_ * sizeof(float));
-        pipe_.InitBuffer(outBuf, stageBytes * 2U);
+        pipe_->InitBuffer(laneBuf, stageBytes * 2U);
+        pipe_->InitBuffer(accBuf, stageElems_ * sizeof(float));
+        pipe_->InitBuffer(tmpBuf, stageElems_ * sizeof(float));
+        pipe_->InitBuffer(outBuf, stageBytes * 2U);
         AscendC::LocalTensor<DT_X> lanes = laneBuf.Get<DT_X>();
         AscendC::LocalTensor<float> acc = accBuf.Get<float>();
         AscendC::LocalTensor<float> tmp = tmpBuf.Get<float>();
@@ -417,12 +419,11 @@ private:
         }
     }
 
-    AscendC::TPipe pipe_;
+    AscendC::TPipe *pipe_ = nullptr;
     AscendC::GlobalTensor<DT_X> xGm_;
     AscendC::GlobalTensor<DT_X> oGm_;
     uint32_t rowLen_ = 0U;
     uint32_t mult_ = 0U;
-    uint32_t rowCount_ = 0U;
     uint32_t tileRows_ = 0U;
     uint32_t tileCols_ = 0U;
     uint32_t colTiles_ = 0U;
@@ -438,7 +439,8 @@ template <typename DT_X, int IS_BACKWARD, int IS_ALIGNED>
  __global__ __aicore__ void mhc_expand(GM_ADDR x, GM_ADDR o, GM_ADDR workspace, GM_ADDR tiling) {
     REGISTER_TILING_DEFAULT(MhcExpandTilingData);
     GET_TILING_DATA_WITH_STRUCT(MhcExpandTilingData, tiling_data, tiling);
+    AscendC::TPipe pipe;
     KernelMhcExpand<DT_X, IS_BACKWARD != 0, IS_ALIGNED != 0> op;
-    op.Init(x, o, tiling_data);
+    op.Init(x, o, tiling_data, &pipe);
     op.Process();
 }
