@@ -12,8 +12,7 @@ constexpr uint64_t MAX_GAP_BLOCKS = 65535U;
 constexpr uint64_t FORWARD_STAGE_ELEMS = 32768U;  // 前向：2 份暂存缓冲
 constexpr uint64_t UB_USABLE_BYTES = 184320U;      // 留出余量后可用于暂存的 UB 字节数
 constexpr uint64_t MIN_TILE_ELEMS = 2048U;        // 单个 tile 的元素下限，用于收敛小形状的核数
-constexpr uint64_t FORWARD_REPLICA_ELEMS = 46080U; // 前向副本路径：两份轮转时单份暂存的元素上限
-constexpr uint64_t FORWARD_RING_ELEMS = 30720U;    // 前向副本路径：三份轮转时单份暂存的元素上限
+constexpr uint64_t FORWARD_REPLICA_ELEMS = 46080U; // 前向副本路径：单份暂存的元素上限
 constexpr uint64_t MIN_REPLICA_CHUNKS = 3U;        // 副本路径至少需要的核内 tile 数
 constexpr uint64_t LAUNCH_SWEET_BLOCKS = 8U;       // 核数低于该值时启动开销反而更高
 constexpr uint64_t LAUNCH_SNAP_ELEMS = 524288U;    // 低于该规模时启动开销主导，核数取 8 的整数倍
@@ -168,7 +167,6 @@ namespace optiling {
             // 反向则一次读入 laneGroup 份梯度，把跨 lane 的跳读并成一次连续搬运。
             const uint64_t plainRows = maxRows;
             uint64_t laneGroup = 1U;
-            uint64_t replicaSlots = 2U;
             if (backward && mult > 1 && lanes <= MAX_BLOCK_COUNT &&
                 (!alignedRow ||
                  (((colCount - tileCols) * elemSize) / BLOCK_BYTES <= MAX_GAP_BLOCKS &&
@@ -206,12 +204,7 @@ namespace optiling {
                 }
             }
             if (!backward && laneGroup > 1U) {
-                // 一行副本装得进三份轮转的预算时就宁可少搬几行，换取更深的流水。
-                const uint64_t stagedRow = colCount * laneGroup;
-                replicaSlots = (stagedRow <= FORWARD_RING_ELEMS) ? 3U : 2U;
-                const uint64_t budgetElems =
-                    (replicaSlots == 3U) ? FORWARD_RING_ELEMS : FORWARD_REPLICA_ELEMS;
-                maxRows = budgetElems / stagedRow;
+                maxRows = FORWARD_REPLICA_ELEMS / (colCount * laneGroup);
                 if (maxRows == 0U) {
                     maxRows = 1U;
                 }
@@ -254,7 +247,6 @@ namespace optiling {
                 // 合并路径的 tile 更大，核内 tile 太少时流水填不满，退回逐份搬运。
                 if (laneGroup > 1U && chunks < MIN_REPLICA_CHUNKS) {
                     laneGroup = 1U;
-                    replicaSlots = 2U;
                     maxRows = plainRows;
                     chunks = CeilDiv(busiest, maxRows);
                 }
@@ -273,9 +265,6 @@ namespace optiling {
             tiling->unitsPerCore = static_cast<uint32_t>(unitsPerCore);
             tiling->tailUnits = static_cast<uint32_t>(tailUnits);
             tiling->ubPitch = static_cast<uint32_t>(ubPitch);
-            // MTE2、V、MTE3 串起来占住一份缓冲的时间约为 MTE3 的两倍，两份轮转刚好打平，
-            // 装得下第三份时就多留一份，给流水留出余量。
-            tiling->slots = static_cast<uint32_t>(replicaSlots);
             tiling->laneGroup = static_cast<uint32_t>(laneGroup);
         } else {
             tiling->rowLen = 0U;
@@ -288,7 +277,6 @@ namespace optiling {
             tiling->tailUnits = 0U;
             tiling->ubPitch = static_cast<uint32_t>(elemsPerBlock);
             tiling->laneGroup = 1U;
-            tiling->slots = 2U;
         }
 
         uint32_t dtypeKey = static_cast<uint32_t>(dtypeX);

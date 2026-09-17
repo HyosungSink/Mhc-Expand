@@ -14,5 +14,4 @@ struct MhcExpandTilingData {
     uint32_t tailUnits;     // 多分配一个工作单元的 Block 个数
     uint32_t ubPitch;       // UB 内相邻行的元素间距
     uint32_t laneGroup;     // 单次 UB 暂存覆盖的副本份数：前向是预排布份数，反向是合并读取份数
-    uint32_t slots;         // 前向副本路径的 UB 轮转份数
 };

@@ -24,7 +24,6 @@ public:
         colTiles_ = tiling.colTiles;
         ubPitch_ = tiling.ubPitch;
         laneGroup_ = tiling.laneGroup;
-        slots_ = tiling.slots;
         stageElems_ = tileRows_ * ubPitch_;
         const uint32_t block = static_cast<uint32_t>(AscendC::GetBlockIdx());
         unitStart_ = block * tiling.unitsPerCore + ((block < tiling.tailUnits) ? block : tiling.tailUnits);
@@ -210,7 +209,7 @@ private:
     {
         const uint32_t outElems = stageElems_ * laneGroup_;
         AscendC::TBuf<AscendC::TPosition::VECCALC> outStage;
-        pipe_.InitBuffer(outStage, outElems * sizeof(DT_X) * slots_);
+        pipe_.InitBuffer(outStage, outElems * sizeof(DT_X) * 2U);
         AscendC::LocalTensor<DT_X> outAll = outStage.Get<DT_X>();
         AscendC::TQueSync<PIPE_MTE2, PIPE_V> loaded;
         AscendC::TQueSync<PIPE_V, PIPE_MTE3> filled;
@@ -234,10 +233,10 @@ private:
                                      static_cast<uint16_t>(groupBlocks), 0U,
                                      static_cast<uint16_t>(laneBlocks * (mult_ - laneGroup_)));
         uint32_t index = 0U;
-        uint32_t slot = 0U;
         for (uint32_t unit = unitStart_; unit < unitEnd_; ++index) {
+            const uint32_t slot = index & 1U;
             const AscendC::TEventID event = static_cast<AscendC::TEventID>(slot);
-            if (index >= slots_) {
+            if (index >= 2U) {
                 recycle.WaitFlag(event);
             }
             const uint32_t rowBase = unit;
@@ -269,12 +268,8 @@ private:
                 }
             }
             recycle.SetFlag(event);
-            ++slot;
-            if (slot == slots_) {
-                slot = 0U;
-            }
         }
-        DrainRing(recycle, index, slot);
+        Drain(recycle, index);
     }
 
     // 一次把 laneGroup 份梯度连续读进 UB，再在 FP32 上逐 lane 累加，
@@ -422,17 +417,6 @@ private:
         }
     }
 
-    // 副本路径按 slots_ 轮转，收尾时逐个归零尚未配对的标志位。
-    template <class SYNC>
-    __aicore__ inline void DrainRing(SYNC &sync, uint32_t issued, uint32_t slot)
-    {
-        const uint32_t pending = (issued < slots_) ? issued : slots_;
-        for (uint32_t index = 0U; index < pending; ++index) {
-            slot = (slot == 0U) ? (slots_ - 1U) : (slot - 1U);
-            sync.WaitFlag(static_cast<AscendC::TEventID>(slot));
-        }
-    }
-
     AscendC::TPipe pipe_;
     AscendC::GlobalTensor<DT_X> xGm_;
     AscendC::GlobalTensor<DT_X> oGm_;
@@ -444,7 +428,6 @@ private:
     uint32_t colTiles_ = 0U;
     uint32_t ubPitch_ = 0U;
     uint32_t laneGroup_ = 1U;
-    uint32_t slots_ = 2U;
     uint32_t stageElems_ = 0U;
     uint32_t unitStart_ = 0U;
     uint32_t unitEnd_ = 0U;
