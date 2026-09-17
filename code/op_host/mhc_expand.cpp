@@ -16,7 +16,6 @@ constexpr uint64_t FORWARD_REPLICA_ELEMS = 46080U; // 前向副本路径：单�
 constexpr uint64_t MIN_REPLICA_CHUNKS = 3U;        // 副本路径至少需要的核内 tile 数
 constexpr uint64_t LAUNCH_SWEET_BLOCKS = 8U;       // 核数低于该值时启动开销反而更高
 constexpr uint64_t LAUNCH_SNAP_ELEMS = 524288U;    // 低于该规模时启动开销主导，核数取 8 的整数倍
-constexpr uint64_t MIN_COL_ELEMS = 2048U;          // 为补并行度切列时，单个列块的元素下限
 constexpr int64_t DEFAULT_MULT = 2;
 
 inline uint64_t CeilDiv(uint64_t value, uint64_t divisor)
@@ -162,25 +161,6 @@ namespace optiling {
                 tileCols = CeilDiv(CeilDiv(colCount, colTiles), elemsPerBlock) * elemsPerBlock;
                 colTiles = CeilDiv(colCount, tileCols);
                 ubPitch = tileCols;
-            }
-
-            // 行数铺不满所有核时，把行再按列切细，制造足够的工作单元；
-            // 列块不小于 MIN_COL_ELEMS，避免单次搬运碎到拖慢 MTE。
-            if (static_cast<uint64_t>(rows) * colTiles < coreNum) {
-                uint64_t wanted = CeilDiv(coreNum, static_cast<uint64_t>(rows));
-                const uint64_t capped = colCount / MIN_COL_ELEMS;
-                if (wanted > capped) {
-                    wanted = capped;
-                }
-                if (wanted > colTiles) {
-                    tileCols = CeilDiv(CeilDiv(colCount, wanted), elemsPerBlock) * elemsPerBlock;
-                    if (tileCols == 0U) {
-                        tileCols = elemsPerBlock;
-                    }
-                    colTiles = CeilDiv(colCount, tileCols);
-                    ubPitch = tileCols;
-                    maxRows = 1U;
-                }
             }
 
             // 前向把 laneGroup 份副本先在 UB 内排好，MTE3 就能按 laneGroup*D 连续写出；
