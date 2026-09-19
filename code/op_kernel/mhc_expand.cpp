@@ -251,8 +251,79 @@ private:
     GlobalTensor<DT_X> oGm_;
 };
 
+template <typename DT_X>
+__aicore__ inline void MhcExpandSmallForward(GM_ADDR x, GM_ADDR o, const MhcExpandTilingData &info) {
+    const uint32_t begin = static_cast<uint32_t>(GetBlockIdx()) * info.rowTile;
+    const uint32_t remain = info.rowTotal - begin;
+    const uint32_t rows = remain < info.rowTile ? remain : info.rowTile;
+    GlobalTensor<DT_X> input;
+    GlobalTensor<DT_X> output;
+    input.SetGlobalBuffer(reinterpret_cast<__gm__ DT_X *>(x));
+    output.SetGlobalBuffer(reinterpret_cast<__gm__ DT_X *>(o));
+    LocalTensor<DT_X> tile(TPosition::VECIN, 0, info.rowTile * info.rowLen);
+    DataCopy(tile, input[static_cast<uint64_t>(begin) * info.rowLen], rows * info.rowLen);
+    constexpr int32_t ready = EVENT_ID0;
+    SetFlag<HardEvent::MTE2_MTE3>(ready);
+    WaitFlag<HardEvent::MTE2_MTE3>(ready);
+    DataCopyExtParams params{static_cast<uint16_t>(rows), info.rowLen * MHC_ELEM_BYTES,
+        0, (info.lanes - 1) * info.rowLen * MHC_ELEM_BYTES, 0};
+    for (uint32_t lane = 0; lane < info.lanes; ++lane) {
+        DataCopyPad(output[(static_cast<uint64_t>(begin) * info.lanes + lane) * info.rowLen],
+                    tile, params);
+    }
+}
+
+template <typename DT_X>
+__aicore__ inline void MhcExpandSmallReduce(GM_ADDR x, GM_ADDR o, const MhcExpandTilingData &info) {
+    const uint32_t begin = static_cast<uint32_t>(GetBlockIdx()) * info.rowTile;
+    const uint32_t remain = info.rowTotal - begin;
+    const uint32_t rows = remain < info.rowTile ? remain : info.rowTile;
+    const uint32_t capacity = info.rowTile * info.rowLen;
+    const uint32_t count = rows * info.rowLen;
+    GlobalTensor<DT_X> input;
+    GlobalTensor<DT_X> output;
+    input.SetGlobalBuffer(reinterpret_cast<__gm__ DT_X *>(x));
+    output.SetGlobalBuffer(reinterpret_cast<__gm__ DT_X *>(o));
+    LocalTensor<DT_X> raw(TPosition::VECIN, 0, capacity * 2);
+    LocalTensor<float> wide(TPosition::VECCALC, capacity * 4, capacity * 2);
+    LocalTensor<DT_X> result(TPosition::VECOUT, capacity * 12, capacity);
+    DataCopyExtParams params{static_cast<uint16_t>(rows), info.rowLen * MHC_ELEM_BYTES,
+        info.rowLen * MHC_ELEM_BYTES, 0, 0};
+    DataCopyPadExtParams<DT_X> padding{false, 0, 0, 0};
+    const uint64_t inputOffset = static_cast<uint64_t>(begin) * 2 * info.rowLen;
+    DataCopyPad(raw, input[inputOffset], params, padding);
+    DataCopyPad(raw[capacity], input[inputOffset + info.rowLen], params, padding);
+    constexpr int32_t loaded = EVENT_ID0;
+    SetFlag<HardEvent::MTE2_V>(loaded);
+    WaitFlag<HardEvent::MTE2_V>(loaded);
+    Cast(wide, raw, RoundMode::CAST_NONE, count);
+    Cast(wide[capacity], raw[capacity], RoundMode::CAST_NONE, count);
+    PipeBarrier<PIPE_V>();
+    Add(wide, wide, wide[capacity], count);
+    PipeBarrier<PIPE_V>();
+    Cast(result, wide, RoundMode::CAST_RINT, count);
+    constexpr int32_t reduced = EVENT_ID0;
+    SetFlag<HardEvent::V_MTE3>(reduced);
+    WaitFlag<HardEvent::V_MTE3>(reduced);
+    DataCopy(output[static_cast<uint64_t>(begin) * info.rowLen], result, count);
+}
+
 template <typename DT_X, int BACKWARD>
 __aicore__ inline void MhcExpandLaunch(GM_ADDR x, GM_ADDR o, const MhcExpandTilingData &info) {
+    if constexpr (BACKWARD == 0) {
+        if (info.batched != 0 && info.colTiles == 1 && info.rowLen % MHC_BLOCK_ELEMS == 0 &&
+            static_cast<uint64_t>(info.rowTile) * info.rowLen <= 16384) {
+            MhcExpandSmallForward<DT_X>(x, o, info);
+            return;
+        }
+    }
+    if constexpr (BACKWARD != 0) {
+        if (info.lanes == 2 && info.colTiles == 1 && info.rowLen % MHC_BLOCK_ELEMS == 0 &&
+            static_cast<uint64_t>(info.rowTile) * info.rowLen <= 8192) {
+            MhcExpandSmallReduce<DT_X>(x, o, info);
+            return;
+        }
+    }
     KernelMhcExpand<DT_X, BACKWARD> op;
     op.Init(x, o, info);
     op.Process();
