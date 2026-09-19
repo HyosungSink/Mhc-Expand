@@ -1,20 +1,24 @@
-// TilingKey template definition header.
 #pragma once
-
 #include "ascendc/host_api/tiling/template_argument.h"
 
-// The tiling key only carries the element type. The direction and the column
-// split stay in the tiling data, so the reachable key set is exactly the set of
-// supported element types.
 ASCENDC_TPL_ARGS_DECL(MhcExpand,
     ASCENDC_TPL_DATATYPE_DECL(DT_X, C_DT_FLOAT16, C_DT_BF16),
+    ASCENDC_TPL_UINT_DECL(MODE, 4, ASCENDC_TPL_UI_LIST, 0, 1, 2, 3, 4),
+    ASCENDC_TPL_UINT_DECL(ROWS, 4, ASCENDC_TPL_UI_LIST, 0, 1, 2, 4, 8),
+    ASCENDC_TPL_UINT_DECL(COLS, 16, ASCENDC_TPL_UI_LIST, 0, 16, 32, 64, 128, 256, 512, 1024),
 );
 
 ASCENDC_TPL_SEL(
     ASCENDC_TPL_ARGS_SEL(
-        ASCENDC_TPL_DATATYPE_SEL(DT_X, C_DT_FLOAT16),
+        ASCENDC_TPL_DATATYPE_SEL(DT_X, C_DT_FLOAT16, C_DT_BF16),
+        ASCENDC_TPL_UINT_SEL(MODE, ASCENDC_TPL_UI_LIST, 0, 1, 2),
+        ASCENDC_TPL_UINT_SEL(ROWS, ASCENDC_TPL_UI_LIST, 0),
+        ASCENDC_TPL_UINT_SEL(COLS, ASCENDC_TPL_UI_LIST, 0),
     ),
     ASCENDC_TPL_ARGS_SEL(
-        ASCENDC_TPL_DATATYPE_SEL(DT_X, C_DT_BF16),
+        ASCENDC_TPL_DATATYPE_SEL(DT_X, C_DT_FLOAT16, C_DT_BF16),
+        ASCENDC_TPL_UINT_SEL(MODE, ASCENDC_TPL_UI_LIST, 3, 4),
+        ASCENDC_TPL_UINT_SEL(ROWS, ASCENDC_TPL_UI_LIST, 1, 2, 4, 8),
+        ASCENDC_TPL_UINT_SEL(COLS, ASCENDC_TPL_UI_LIST, 16, 32, 64, 128, 256, 512, 1024),
     ),
 );
