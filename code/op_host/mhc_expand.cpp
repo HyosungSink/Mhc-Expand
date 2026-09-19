@@ -212,7 +212,21 @@ static ge::graphStatus TilingFunc(gert::TilingContext *context) {
         fixedRows = rowTile;
         fixedCols = static_cast<uint32_t>(d);
     }
-    ASCENDC_TPL_SEL_PARAM(context, static_cast<uint32_t>(dtypeX), mode, fixedRows, fixedCols);
+    uint32_t sLog2 = 0;
+    if (mode == 0 && !backward && batched && colTiles == 1 && numCores == 40 &&
+        rowCount >= 256 && rowCount <= 4096 && (rowCount & (rowCount - 1)) == 0 &&
+        d >= 1024 && d <= 4096 && (d & (d - 1)) == 0 &&
+        multiplier >= 2 && multiplier <= 8 && (multiplier & (multiplier - 1)) == 0 &&
+        static_cast<uint64_t>(d) * multiplier <= 32768 && tileLen == d) {
+        mode = 7;
+        fixedRows = static_cast<uint32_t>(multiplier);
+        fixedCols = static_cast<uint32_t>(d);
+        for (uint32_t remainingRows = rowCount; remainingRows > 1; remainingRows >>= 1) {
+            ++sLog2;
+        }
+    }
+    ASCENDC_TPL_SEL_PARAM(context, static_cast<uint32_t>(dtypeX),
+                         mode, fixedRows, fixedCols, sLog2);
     size_t *currentWorkspace = context->GetWorkspaceSizes(1);
     currentWorkspace[0] = 0;
     return ge::GRAPH_SUCCESS;

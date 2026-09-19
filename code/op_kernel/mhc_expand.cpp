@@ -374,9 +374,15 @@ __aicore__ inline void MhcExpandLaunch(GM_ADDR x, GM_ADDR o, const MhcExpandTili
 // Entry of the compiled binary. `DT_X` is the template parameter declared for
 // this operator, so the code generator instantiates the kernel once per tiling
 // key and the body selects the element type of that instantiation.
-template <typename DT_X, uint32_t MODE, uint32_t ROWS, uint32_t COLS>
+template <typename DT_X, uint32_t MODE, uint32_t ROWS, uint32_t COLS, uint32_t S_LOG2>
 __global__ __aicore__ void mhc_expand(GM_ADDR x, GM_ADDR o, GM_ADDR workspace, GM_ADDR tiling) {
-    if constexpr (MODE == 3) {
+    if constexpr (MODE == 7) {
+        constexpr uint32_t sourceRows = 1u << S_LOG2;
+        constexpr MhcExpandTilingData info{
+            (sourceRows + 39u) / 40u, sourceRows, COLS, COLS, 1u, ROWS, 1u, 0u
+        };
+        MhcExpandLaunch<DT_X, 0>(x, o, info);
+    } else if constexpr (MODE == 3) {
         MhcExpandSmallForward<DT_X, ROWS, COLS>(x, o, MhcExpandTilingData{});
     } else if constexpr (MODE == 4) {
         MhcExpandSmallReduce<DT_X, ROWS, COLS>(x, o, MhcExpandTilingData{});
