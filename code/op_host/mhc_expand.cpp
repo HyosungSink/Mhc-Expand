@@ -98,7 +98,7 @@ static ge::graphStatus TilingFunc(gert::TilingContext *context) {
 
     // `rows` is the number of output rows of this direction and `d` is the
     // length of every row, which is also the innermost stride of both operands.
-    // Forward reads one stream of S rows and writes S * multiplier rows;
+    // Forward assigns S source rows and emits multiplier copies of each;
     // backward reads S * multiplier rows and writes S rows.
     const gert::Shape &shape = shapeX->GetOriginShape();
     const size_t rank = shape.GetDimNum();
@@ -132,7 +132,7 @@ static ge::graphStatus TilingFunc(gert::TilingContext *context) {
             return ge::GRAPH_FAILED;
         }
         streams = shape.GetDim(0);
-        rows = static_cast<size_t>(streams) * static_cast<size_t>(multiplier);
+        rows = static_cast<size_t>(streams);
         // The forward operand carries the single stream that is replicated, so
         // it has to cover S * D elements. A rank-2 declaration whose leading
         // extent is the collapsed lane axis reports S * D here as well, and this
@@ -146,6 +146,16 @@ static ge::graphStatus TilingFunc(gert::TilingContext *context) {
     }
     if (d > 0x7FFFFFFF || rows > 0x7FFFFFFF) {
         return ge::GRAPH_FAILED;
+    }
+
+    const bool batched = !backward &&
+        static_cast<uint64_t>(streams) * multiplier * d <= 32ULL * 1024 * 1024;
+    if (!backward && !batched) {
+        const uint64_t expandedRows = static_cast<uint64_t>(streams) * multiplier;
+        if (expandedRows > 0x7FFFFFFF) {
+            return ge::GRAPH_FAILED;
+        }
+        rows = static_cast<size_t>(expandedRows);
     }
 
     const uint32_t tileLen = ChooseTileLen(static_cast<uint32_t>(d), byteSize, backward);
@@ -169,6 +179,7 @@ static ge::graphStatus TilingFunc(gert::TilingContext *context) {
     tiling->colTiles = colTiles;
     tiling->lanes = static_cast<uint32_t>(multiplier);
     tiling->backward = backward ? 1u : 0u;
+    tiling->batched = batched ? 1u : 0u;
 
     context->SetBlockDim(blocks);
     ASCENDC_TPL_SEL_PARAM(context, static_cast<uint32_t>(dtypeX));

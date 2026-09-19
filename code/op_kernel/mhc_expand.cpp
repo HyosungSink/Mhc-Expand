@@ -41,9 +41,16 @@ public:
         // A vector store covers whole blocks, so a scratch tile is sized for the
         // block aligned length of a tile, never for its payload alone.
         const uint32_t tileBytes = BlockAligned(info.tileLen) * MHC_ELEM_BYTES;
-        pipe_.InitBuffer(inQue_, 3, AlignUp(tileBytes));
-        pipe_.InitBuffer(outQue_, 3, AlignUp(tileBytes));
-        if constexpr (BACKWARD != 0) {
+        if constexpr (BACKWARD == 0) {
+            if (info.batched != 0) {
+                pipe_.InitBuffer(copyQue_, 3, 32768);
+            } else {
+                pipe_.InitBuffer(inQue_, 3, AlignUp(tileBytes));
+                pipe_.InitBuffer(outQue_, 3, AlignUp(tileBytes));
+            }
+        } else {
+            pipe_.InitBuffer(inQue_, 3, AlignUp(tileBytes));
+            pipe_.InitBuffer(outQue_, 3, AlignUp(tileBytes));
             pipe_.InitBuffer(laneQue_, 4, AlignUp(tileBytes));
             pipe_.InitBuffer(wideBuf_, AlignUp(info.tileLen * static_cast<uint32_t>(sizeof(DT_F))));
             pipe_.InitBuffer(accBuf_, AlignUp(info.tileLen * static_cast<uint32_t>(sizeof(DT_F))));
@@ -55,7 +62,11 @@ public:
         if constexpr (BACKWARD != 0) {
             ReduceRows();
         } else {
-            ExpandRows();
+            if (info_.batched != 0) {
+                ExpandRows();
+            } else {
+                ExpandRowsLegacy();
+            }
         }
     }
 
@@ -140,10 +151,7 @@ private:
         outQue_.FreeTensor(tile);
     }
 
-    // Every lane of a row holds the same value, so one column tile of the row
-    // is read once and written to every lane it feeds. Both the replication and
-    // the store move whole blocks, which is why a tile never ends mid block.
-    __aicore__ inline void ExpandRows() {
+    __aicore__ inline void ExpandRowsLegacy() {
         const uint32_t rowEnd = MinU32(RowBegin() + info_.rowTile, info_.rowTotal);
         for (uint32_t row = RowBegin(); row < rowEnd; ++row) {
             const uint32_t srcRow = row / info_.lanes;
@@ -158,6 +166,45 @@ private:
                 outQue_.EnQue(copy);
                 inQue_.FreeTensor(tile);
                 StoreRow((srcRow * info_.lanes + lane) * info_.rowLen + offset, len);
+            }
+        }
+    }
+
+    // A batch remains in UB until every expanded lane has consumed it.
+    __aicore__ inline void ExpandRows() {
+        const uint32_t rowEnd = MinU32(RowBegin() + info_.rowTile, info_.rowTotal);
+        uint32_t batchRows = 16384 / BlockAligned(info_.tileLen);
+        const uint64_t outputStride = static_cast<uint64_t>(info_.lanes) * info_.rowLen;
+        if (outputStride * MHC_ELEM_BYTES > 0xFFFFFFFFULL) {
+            batchRows = 1;
+        }
+        for (uint32_t row = RowBegin(); row < rowEnd; row += batchRows) {
+            const uint32_t count = MinU32(batchRows, rowEnd - row);
+            for (uint32_t col = 0; col < info_.colTiles; ++col) {
+                const uint32_t offset = col * info_.tileLen;
+                const uint32_t len = MinU32(info_.tileLen, info_.rowLen - offset);
+                LocalTensor<DT_X> tile = copyQue_.AllocTensor<DT_X>();
+                const uint64_t inputOffset = static_cast<uint64_t>(row) * info_.rowLen + offset;
+                if (len == info_.rowLen && BlockAligned(len) == len) {
+                    DataCopy(tile, xGm_[inputOffset], count * len);
+                } else {
+                    DataCopyExtParams inputParams{static_cast<uint16_t>(count),
+                        len * MHC_ELEM_BYTES, (info_.rowLen - len) * MHC_ELEM_BYTES, 0, 0};
+                    DataCopyPadExtParams<DT_X> padding{false, 0, 0, 0};
+                    DataCopyPad(tile, xGm_[inputOffset], inputParams, padding);
+                }
+                copyQue_.EnQue(tile);
+                tile = copyQue_.DeQue<DT_X>();
+                const uint32_t gap = count == 1 ? 0 :
+                    static_cast<uint32_t>((outputStride - len) * MHC_ELEM_BYTES);
+                DataCopyExtParams outputParams{static_cast<uint16_t>(count),
+                    len * MHC_ELEM_BYTES, 0, gap, 0};
+                for (uint32_t lane = 0; lane < info_.lanes; ++lane) {
+                    const uint64_t outputOffset =
+                        (static_cast<uint64_t>(row) * info_.lanes + lane) * info_.rowLen + offset;
+                    DataCopyPad(oGm_[outputOffset], tile, outputParams);
+                }
+                copyQue_.FreeTensor(tile);
             }
         }
     }
@@ -193,6 +240,7 @@ private:
 
     MhcExpandTilingData info_;
     TPipe pipe_;
+    TQueBind<QuePosition::VECIN, QuePosition::VECOUT, 3> copyQue_;
     TQue<QuePosition::VECIN, 3> inQue_;
     TQue<QuePosition::VECOUT, 3> outQue_;
     TQue<QuePosition::VECIN, 4> laneQue_;

@@ -16,5 +16,6 @@ struct MhcExpandTilingData {
     uint32_t tileLen;    // elements per column tile
     uint32_t colTiles;   // number of column tiles covering one row
     uint32_t lanes;      // expansion factor (mhc_mult)
+    uint32_t batched;   // forward source rows are grouped in UB
     uint32_t backward;   // 1 for the reduction direction
 };
