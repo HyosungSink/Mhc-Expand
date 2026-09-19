@@ -43,7 +43,10 @@ public:
         // block aligned length of a tile, never for its payload alone.
         const uint32_t tileBytes = BlockAligned(info.tileLen) * MHC_ELEM_BYTES;
         if constexpr (BACKWARD == 0) {
-            if (info.batched != 0) {
+            if (PackedForward()) {
+                pipe_->InitBuffer(inQue_, 2, AlignUp(tileBytes));
+                pipe_->InitBuffer(outQue_, 2, info.rowLen * info.lanes * MHC_ELEM_BYTES);
+            } else if (info.batched != 0) {
                 pipe_->InitBuffer(copyQue_, 3, 32768);
             } else {
                 pipe_->InitBuffer(inQue_, 3, AlignUp(tileBytes));
@@ -63,7 +66,9 @@ public:
         if constexpr (BACKWARD != 0) {
             ReduceRows();
         } else {
-            if (info_.batched != 0) {
+            if (PackedForward()) {
+                ExpandPackedRows();
+            } else if (info_.batched != 0) {
                 ExpandRows();
             } else {
                 ExpandRowsLegacy();
@@ -150,6 +155,27 @@ private:
         LocalTensor<DT_X> tile = outQue_.DeQue<DT_X>();
         StoreTile(begin, tile, len);
         outQue_.FreeTensor(tile);
+    }
+
+    __aicore__ inline bool PackedForward() const {
+        return info_.batched != 0 && info_.colTiles == 1 && info_.lanes > 1 &&
+            info_.rowLen % MHC_BLOCK_ELEMS == 0 &&
+            static_cast<uint64_t>(info_.rowLen) * info_.lanes <= 32768;
+    }
+
+    __aicore__ inline void ExpandPackedRows() {
+        const uint32_t rowEnd = MinU32(RowBegin() + info_.rowTile, info_.rowTotal);
+        for (uint32_t row = RowBegin(); row < rowEnd; ++row) {
+            LoadRow(row * info_.rowLen, info_.rowLen);
+            LocalTensor<DT_X> input = inQue_.DeQue<DT_X>();
+            LocalTensor<DT_X> output = outQue_.AllocTensor<DT_X>();
+            for (uint32_t lane = 0; lane < info_.lanes; ++lane) {
+                DataCopy(output[lane * info_.rowLen], input, info_.rowLen);
+            }
+            outQue_.EnQue(output);
+            inQue_.FreeTensor(input);
+            StoreRow(row * info_.lanes * info_.rowLen, info_.lanes * info_.rowLen);
+        }
     }
 
     __aicore__ inline void ExpandRowsLegacy() {
@@ -266,6 +292,22 @@ __aicore__ inline void MhcExpandSmallForward(GM_ADDR x, GM_ADDR o, const MhcExpa
     output.SetGlobalBuffer(reinterpret_cast<__gm__ DT_X *>(o));
     LocalTensor<DT_X> tile(TPosition::VECIN, 0, rowTile * rowLen);
     DataCopy(tile, input[static_cast<uint64_t>(begin) * rowLen], rows * rowLen);
+    if constexpr (FIXED_ROWS != 0) {
+        LocalTensor<DT_X> packed(TPosition::VECOUT, FIXED_ROWS * FIXED_COLS * MHC_ELEM_BYTES,
+                                 FIXED_ROWS * FIXED_COLS * 2);
+        SetFlag<HardEvent::MTE2_V>(EVENT_ID0);
+        WaitFlag<HardEvent::MTE2_V>(EVENT_ID0);
+        DataCopyParams replicate{static_cast<uint16_t>(FIXED_ROWS),
+            static_cast<uint16_t>(FIXED_COLS / MHC_BLOCK_ELEMS), 0,
+            static_cast<uint16_t>(FIXED_COLS / MHC_BLOCK_ELEMS)};
+        DataCopy(packed, tile, replicate);
+        DataCopy(packed[FIXED_COLS], tile, replicate);
+        SetFlag<HardEvent::V_MTE3>(EVENT_ID0);
+        WaitFlag<HardEvent::V_MTE3>(EVENT_ID0);
+        DataCopy(output[static_cast<uint64_t>(begin) * FIXED_COLS * 2],
+                 packed, FIXED_ROWS * FIXED_COLS * 2);
+        return;
+    }
     constexpr int32_t ready = EVENT_ID0;
     SetFlag<HardEvent::MTE2_MTE3>(ready);
     WaitFlag<HardEvent::MTE2_MTE3>(ready);
