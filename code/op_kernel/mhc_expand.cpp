@@ -44,9 +44,8 @@ public:
         const uint32_t tileBytes = BlockAligned(info.tileLen) * MHC_ELEM_BYTES;
         if constexpr (BACKWARD == 0) {
             if (PackedForward()) {
-                const uint32_t packedBytes = info.rowLen * info.lanes * MHC_ELEM_BYTES;
-                const uint32_t packedSlots = packedBytes <= (160u * 1024u) / 3u ? 3u : 2u;
-                pipe_->InitBuffer(resBuf_, packedSlots * packedBytes);
+                pipe_->InitBuffer(inQue_, 2, AlignUp(tileBytes));
+                pipe_->InitBuffer(outQue_, 2, info.rowLen * info.lanes * MHC_ELEM_BYTES);
             } else if (info.batched != 0) {
                 pipe_->InitBuffer(copyQue_, 3, 32768);
             } else {
@@ -164,60 +163,18 @@ private:
             static_cast<uint64_t>(info_.rowLen) * info_.lanes <= 32768;
     }
 
-    template <uint32_t SLOTS>
-    __aicore__ inline void ExpandPackedRowsSlots() {
-        const uint32_t rowBegin = RowBegin();
-        const uint32_t rowEnd = MinU32(rowBegin + info_.rowTile, info_.rowTotal);
-        const uint32_t packedElements = info_.rowLen * info_.lanes;
-        LocalTensor<DT_X> buffers = resBuf_.Get<DT_X>();
-        TEventID recycle[SLOTS];
-        TEventID inputReady[SLOTS];
-        TEventID outputReady[SLOTS];
-        #pragma unroll
-        for (uint32_t index = 0; index < SLOTS; ++index) {
-            recycle[index] = pipe_->AllocEventID<HardEvent::MTE3_MTE2>();
-            inputReady[index] = pipe_->AllocEventID<HardEvent::MTE2_V>();
-            outputReady[index] = pipe_->AllocEventID<HardEvent::V_MTE3>();
-            SetFlag<HardEvent::MTE3_MTE2>(recycle[index]);
-        }
-        uint32_t slot = 0;
-        for (uint32_t row = rowBegin; row < rowEnd; ++row) {
-            LocalTensor<DT_X> tile = buffers[slot * packedElements];
-            WaitFlag<HardEvent::MTE3_MTE2>(recycle[slot]);
-            DataCopy(tile, xGm_[static_cast<uint64_t>(row) * info_.rowLen], info_.rowLen);
-            SetFlag<HardEvent::MTE2_V>(inputReady[slot]);
-            WaitFlag<HardEvent::MTE2_V>(inputReady[slot]);
-            for (uint32_t lane = 1; lane < info_.lanes; ++lane) {
-                DataCopy(tile[lane * info_.rowLen], tile, info_.rowLen);
-            }
-            SetFlag<HardEvent::V_MTE3>(outputReady[slot]);
-            WaitFlag<HardEvent::V_MTE3>(outputReady[slot]);
-            DataCopy(oGm_[static_cast<uint64_t>(row) * packedElements], tile, packedElements);
-            SetFlag<HardEvent::MTE3_MTE2>(recycle[slot]);
-            ++slot;
-            if (slot == SLOTS) {
-                slot = 0;
-            }
-        }
-        #pragma unroll
-        for (uint32_t index = 0; index < SLOTS; ++index) {
-            WaitFlag<HardEvent::MTE3_MTE2>(recycle[index]);
-        }
-        PipeBarrier<PIPE_ALL>();
-        #pragma unroll
-        for (uint32_t index = 0; index < SLOTS; ++index) {
-            pipe_->ReleaseEventID<HardEvent::MTE3_MTE2>(recycle[index]);
-            pipe_->ReleaseEventID<HardEvent::MTE2_V>(inputReady[index]);
-            pipe_->ReleaseEventID<HardEvent::V_MTE3>(outputReady[index]);
-        }
-    }
-
     __aicore__ inline void ExpandPackedRows() {
-        const uint32_t packedBytes = info_.rowLen * info_.lanes * MHC_ELEM_BYTES;
-        if (packedBytes <= (160u * 1024u) / 3u) {
-            ExpandPackedRowsSlots<3>();
-        } else {
-            ExpandPackedRowsSlots<2>();
+        const uint32_t rowEnd = MinU32(RowBegin() + info_.rowTile, info_.rowTotal);
+        for (uint32_t row = RowBegin(); row < rowEnd; ++row) {
+            LoadRow(row * info_.rowLen, info_.rowLen);
+            LocalTensor<DT_X> input = inQue_.DeQue<DT_X>();
+            LocalTensor<DT_X> output = outQue_.AllocTensor<DT_X>();
+            for (uint32_t lane = 0; lane < info_.lanes; ++lane) {
+                DataCopy(output[lane * info_.rowLen], input, info_.rowLen);
+            }
+            outQue_.EnQue(output);
+            inQue_.FreeTensor(input);
+            StoreRow(row * info_.lanes * info_.rowLen, info_.lanes * info_.rowLen);
         }
     }
 
