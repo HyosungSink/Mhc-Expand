@@ -3,7 +3,7 @@
 //
 // Both directions work on one row of one column tile at a time. A block owns a
 // contiguous range of output rows derived from its block index, so every block
-// writes a disjoint region of the output and no workspace, cross block
+// stores a disjoint region of the output and no workspace, cross block
 // accumulation or second pass is needed.
 //
 // The Host splits a row into column tiles that are whole 32B blocks, except for
@@ -280,6 +280,7 @@ private:
 
 template <typename DT_X, uint32_t FIXED_ROWS = 0, uint32_t FIXED_COLS = 0>
 __aicore__ inline void MhcExpandSmallForward(GM_ADDR x, GM_ADDR o, const MhcExpandTilingData &info) {
+    InitSocState();
     const uint32_t rowTile = FIXED_ROWS != 0 ? FIXED_ROWS : info.rowTile;
     const uint32_t rowLen = FIXED_COLS != 0 ? FIXED_COLS : info.rowLen;
     const uint32_t lanes = FIXED_ROWS != 0 ? 2 : info.lanes;
@@ -321,6 +322,7 @@ __aicore__ inline void MhcExpandSmallForward(GM_ADDR x, GM_ADDR o, const MhcExpa
 
 template <typename DT_X, uint32_t FIXED_ROWS = 0, uint32_t FIXED_COLS = 0>
 __aicore__ inline void MhcExpandSmallReduce(GM_ADDR x, GM_ADDR o, const MhcExpandTilingData &info) {
+    InitSocState();
     const uint32_t rowTile = FIXED_ROWS != 0 ? FIXED_ROWS : info.rowTile;
     const uint32_t rowLen = FIXED_COLS != 0 ? FIXED_COLS : info.rowLen;
     const uint32_t lanes = FIXED_ROWS != 0 ? 2 : info.lanes;
@@ -336,21 +338,25 @@ __aicore__ inline void MhcExpandSmallReduce(GM_ADDR x, GM_ADDR o, const MhcExpan
     LocalTensor<DT_X> raw(TPosition::VECIN, 0, capacity * 2);
     LocalTensor<float> wide(TPosition::VECCALC, capacity * 4, capacity * 2);
     LocalTensor<DT_X> result(TPosition::VECOUT, capacity * 12, capacity);
-    DataCopyExtParams params{static_cast<uint16_t>(rows), rowLen * MHC_ELEM_BYTES,
-        rowLen * MHC_ELEM_BYTES, 0, 0};
-    DataCopyPadExtParams<DT_X> padding{false, 0, 0, 0};
+    DataCopyParams params{static_cast<uint16_t>(rows),
+        static_cast<uint16_t>(rowLen / MHC_BLOCK_ELEMS),
+        static_cast<uint16_t>(rowLen / MHC_BLOCK_ELEMS), 0};
     const uint64_t inputOffset = static_cast<uint64_t>(begin) * 2 * rowLen;
-    DataCopyPad(raw, input[inputOffset], params, padding);
-    DataCopyPad(raw[capacity], input[inputOffset + rowLen], params, padding);
+    DataCopy(raw, input[inputOffset], params);
+    DataCopy(raw[capacity], input[inputOffset + rowLen], params);
     constexpr int32_t loaded = EVENT_ID0;
     SetFlag<HardEvent::MTE2_V>(loaded);
     WaitFlag<HardEvent::MTE2_V>(loaded);
-    Cast(wide, raw, RoundMode::CAST_NONE, count);
-    Cast(wide[capacity], raw[capacity], RoundMode::CAST_NONE, count);
-    PipeBarrier<PIPE_V>();
-    Add(wide, wide, wide[capacity], count);
-    PipeBarrier<PIPE_V>();
-    Cast(result, wide, RoundMode::CAST_RINT, count);
+    if constexpr (FIXED_ROWS != 0 && std::is_same<DT_X, half>::value) {
+        Add(result, raw, raw[capacity], count);
+    } else {
+        Cast(wide, raw, RoundMode::CAST_NONE, count);
+        Cast(wide[capacity], raw[capacity], RoundMode::CAST_NONE, count);
+        PipeBarrier<PIPE_V>();
+        Add(wide, wide, wide[capacity], count);
+        PipeBarrier<PIPE_V>();
+        Cast(result, wide, RoundMode::CAST_RINT, count);
+    }
     constexpr int32_t reduced = EVENT_ID0;
     SetFlag<HardEvent::V_MTE3>(reduced);
     WaitFlag<HardEvent::V_MTE3>(reduced);

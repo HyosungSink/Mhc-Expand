@@ -99,7 +99,7 @@ static ge::graphStatus TilingFunc(gert::TilingContext *context) {
     // `rows` is the number of output rows of this direction and `d` is the
     // length of every row, which is also the innermost stride of both operands.
     // Forward assigns S source rows and emits multiplier copies of each;
-    // backward reads S * multiplier rows and writes S rows.
+    // backward reads S * multiplier rows and stores S rows.
     const gert::Shape &shape = shapeX->GetOriginShape();
     const size_t rank = shape.GetDimNum();
     if (rank != 2 && rank != 3) {
@@ -114,7 +114,7 @@ static ge::graphStatus TilingFunc(gert::TilingContext *context) {
             if (shape.GetDim(1) != multiplier) {
                 return ge::GRAPH_FAILED;
             }
-            // Backward reads S * multiplier rows and writes S rows, so the
+            // Backward reads S * multiplier rows and stores S rows, so the
             // output rows of this direction are the S rows of the input stream.
             streams = shape.GetDim(0);
             rows = static_cast<size_t>(streams);
