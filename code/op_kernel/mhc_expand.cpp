@@ -34,7 +34,8 @@ class KernelMhcExpand {
 public:
     __aicore__ inline KernelMhcExpand() {}
 
-    __aicore__ inline void Init(GM_ADDR x, GM_ADDR o, const MhcExpandTilingData &info) {
+    __aicore__ inline void Init(GM_ADDR x, GM_ADDR o, const MhcExpandTilingData &info, TPipe &pipe) {
+        pipe_ = &pipe;
         info_ = info;
         xGm_.SetGlobalBuffer(reinterpret_cast<__gm__ DT_X *>(x));
         oGm_.SetGlobalBuffer(reinterpret_cast<__gm__ DT_X *>(o));
@@ -43,18 +44,18 @@ public:
         const uint32_t tileBytes = BlockAligned(info.tileLen) * MHC_ELEM_BYTES;
         if constexpr (BACKWARD == 0) {
             if (info.batched != 0) {
-                pipe_.InitBuffer(copyQue_, 3, 32768);
+                pipe_->InitBuffer(copyQue_, 3, 32768);
             } else {
-                pipe_.InitBuffer(inQue_, 3, AlignUp(tileBytes));
-                pipe_.InitBuffer(outQue_, 3, AlignUp(tileBytes));
+                pipe_->InitBuffer(inQue_, 3, AlignUp(tileBytes));
+                pipe_->InitBuffer(outQue_, 3, AlignUp(tileBytes));
             }
         } else {
-            pipe_.InitBuffer(inQue_, 3, AlignUp(tileBytes));
-            pipe_.InitBuffer(outQue_, 3, AlignUp(tileBytes));
-            pipe_.InitBuffer(laneQue_, 4, AlignUp(tileBytes));
-            pipe_.InitBuffer(wideBuf_, AlignUp(info.tileLen * static_cast<uint32_t>(sizeof(DT_F))));
-            pipe_.InitBuffer(accBuf_, AlignUp(info.tileLen * static_cast<uint32_t>(sizeof(DT_F))));
-            pipe_.InitBuffer(resBuf_, AlignUp(tileBytes));
+            pipe_->InitBuffer(inQue_, 3, AlignUp(tileBytes));
+            pipe_->InitBuffer(outQue_, 3, AlignUp(tileBytes));
+            pipe_->InitBuffer(laneQue_, 4, AlignUp(tileBytes));
+            pipe_->InitBuffer(wideBuf_, AlignUp(info.tileLen * static_cast<uint32_t>(sizeof(DT_F))));
+            pipe_->InitBuffer(accBuf_, AlignUp(info.tileLen * static_cast<uint32_t>(sizeof(DT_F))));
+            pipe_->InitBuffer(resBuf_, AlignUp(tileBytes));
         }
     }
 
@@ -239,7 +240,7 @@ private:
     }
 
     MhcExpandTilingData info_;
-    TPipe pipe_;
+    TPipe *pipe_;
     TQueBind<QuePosition::VECIN, QuePosition::VECOUT, 3> copyQue_;
     TQue<QuePosition::VECIN, 3> inQue_;
     TQue<QuePosition::VECOUT, 3> outQue_;
@@ -316,8 +317,9 @@ __aicore__ inline void MhcExpandSmallReduce(GM_ADDR x, GM_ADDR o, const MhcExpan
 
 template <typename DT_X, int BACKWARD>
 __aicore__ inline void MhcExpandLaunch(GM_ADDR x, GM_ADDR o, const MhcExpandTilingData &info) {
+    TPipe pipe;
     KernelMhcExpand<DT_X, BACKWARD> op;
-    op.Init(x, o, info);
+    op.Init(x, o, info, pipe);
     op.Process();
 }
 

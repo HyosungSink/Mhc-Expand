@@ -166,7 +166,19 @@ static ge::graphStatus TilingFunc(gert::TilingContext *context) {
     }
     const uint32_t colTiles = static_cast<uint32_t>(tileCount);
 
-    const uint32_t maxCores = numCores == 0 ? 1 : numCores;
+    uint32_t maxCores = numCores == 0 ? 1 : numCores;
+    const uint64_t compactElements = static_cast<uint64_t>(rowCount) * d;
+    if (multiplier == 2 && d >= 16 && d <= 1024 && (d & (d - 1)) == 0 &&
+        compactElements <= 32768) {
+        uint32_t compactCores = static_cast<uint32_t>((compactElements + 2047) / 2048);
+        const uint32_t rowGroups = (rowCount + 7) / 8;
+        if (compactCores < rowGroups) {
+            compactCores = rowGroups;
+        }
+        if (compactCores < maxCores) {
+            maxCores = compactCores;
+        }
+    }
     const uint32_t maxBlocks = rowCount < maxCores ? rowCount : maxCores;
     const uint32_t rowTile = RowsPerBlock(rowCount, maxBlocks);
     const uint32_t blocks = (rowCount + rowTile - 1) / rowTile;
