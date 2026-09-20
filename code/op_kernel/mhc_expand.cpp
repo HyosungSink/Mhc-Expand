@@ -294,19 +294,14 @@ __aicore__ inline void MhcExpandSmallForward(GM_ADDR x, GM_ADDR o, const MhcExpa
     LocalTensor<DT_X> tile(TPosition::VECIN, 0, rowTile * rowLen);
     DataCopy(tile, input[static_cast<uint64_t>(begin) * rowLen], rows * rowLen);
     if constexpr (FIXED_ROWS != 0) {
-        LocalTensor<DT_X> packed(TPosition::VECOUT, FIXED_ROWS * FIXED_COLS * MHC_ELEM_BYTES,
-                                 FIXED_ROWS * FIXED_COLS * 2);
-        SetFlag<HardEvent::MTE2_V>(EVENT_ID0);
-        WaitFlag<HardEvent::MTE2_V>(EVENT_ID0);
+        SetFlag<HardEvent::MTE2_MTE3>(EVENT_ID0);
+        WaitFlag<HardEvent::MTE2_MTE3>(EVENT_ID0);
         DataCopyParams replicate{static_cast<uint16_t>(FIXED_ROWS),
             static_cast<uint16_t>(FIXED_COLS / MHC_BLOCK_ELEMS), 0,
             static_cast<uint16_t>(FIXED_COLS / MHC_BLOCK_ELEMS)};
-        DataCopy(packed, tile, replicate);
-        DataCopy(packed[FIXED_COLS], tile, replicate);
-        SetFlag<HardEvent::V_MTE3>(EVENT_ID0);
-        WaitFlag<HardEvent::V_MTE3>(EVENT_ID0);
-        DataCopy(output[static_cast<uint64_t>(begin) * FIXED_COLS * 2],
-                 packed, FIXED_ROWS * FIXED_COLS * 2);
+        const uint64_t outputOffset = static_cast<uint64_t>(begin) * FIXED_COLS * 2;
+        DataCopy(output[outputOffset], tile, replicate);
+        DataCopy(output[outputOffset + FIXED_COLS], tile, replicate);
         return;
     }
     constexpr int32_t ready = EVENT_ID0;
