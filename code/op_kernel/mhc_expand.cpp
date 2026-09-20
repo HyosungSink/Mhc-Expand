@@ -332,6 +332,10 @@ __aicore__ inline void MhcExpandSmallReduce(GM_ADDR x, GM_ADDR o, const MhcExpan
     output.SetGlobalBuffer(reinterpret_cast<__gm__ DT_X *>(o));
     LocalTensor<DT_X> raw(TPosition::VECIN, 0, capacity * 2);
     LocalTensor<float> wide(TPosition::VECCALC, capacity * 4, capacity * 2);
+    constexpr uint32_t secondWideGap =
+        FIXED_ROWS != 0 && std::is_same<DT_X, bfloat16_t>::value &&
+        static_cast<uint64_t>(FIXED_ROWS) * FIXED_COLS >= 128 ? 256 : 0;
+    LocalTensor<float> secondWide(TPosition::VECCALC, capacity * 8 + secondWideGap, capacity);
     LocalTensor<DT_X> result(TPosition::VECOUT, capacity * 12, capacity);
     DataCopyParams params{static_cast<uint16_t>(rows),
         static_cast<uint16_t>(rowLen / MHC_BLOCK_ELEMS),
@@ -346,11 +350,24 @@ __aicore__ inline void MhcExpandSmallReduce(GM_ADDR x, GM_ADDR o, const MhcExpan
         Add(result, raw, raw[capacity], count);
     } else {
         Cast(wide, raw, RoundMode::CAST_NONE, count);
-        Cast(wide[capacity], raw[capacity], RoundMode::CAST_NONE, count);
+        if constexpr (secondWideGap != 0) {
+            Cast(secondWide, raw[capacity], RoundMode::CAST_NONE, count);
+        } else {
+            Cast(wide[capacity], raw[capacity], RoundMode::CAST_NONE, count);
+        }
         PipeBarrier<PIPE_V>();
-        Add(wide, wide, wide[capacity], count);
-        PipeBarrier<PIPE_V>();
-        Cast(result, wide, RoundMode::CAST_RINT, count);
+        if constexpr (secondWideGap != 0) {
+            constexpr uint32_t accumulatorOffset =
+                static_cast<uint64_t>(FIXED_ROWS) * FIXED_COLS <= 4096 ? 65536 : 131072;
+            LocalTensor<float> accumulator(TPosition::VECCALC, accumulatorOffset, capacity);
+            Add(accumulator, wide, secondWide, count);
+            PipeBarrier<PIPE_V>();
+            Cast(result, accumulator, RoundMode::CAST_RINT, count);
+        } else {
+            Add(wide, wide, wide[capacity], count);
+            PipeBarrier<PIPE_V>();
+            Cast(result, wide, RoundMode::CAST_RINT, count);
+        }
     }
     constexpr int32_t reduced = EVENT_ID0;
     SetFlag<HardEvent::V_MTE3>(reduced);
