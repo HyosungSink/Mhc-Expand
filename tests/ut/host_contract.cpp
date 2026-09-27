@@ -57,12 +57,19 @@ void Check(const std::vector<std::string> &fields, fe::PlatFormInfos &platform)
             check == "zero_multiplier" || check == "lane_mismatch",
         "unknown contract check: " + check);
 
-    gert::Shape inputShape = backward ? gert::Shape{s, multiplier, d} : gert::Shape{s, d};
+    // Tiling reads the operand that actually carries the lanes: the expanded
+    // stream for backward and the flattened expansion of the forward operand.
+    // Shape inference reads the declared operand, which is what the semantic
+    // shapes of the two directions describe.
+    gert::Shape inputShape = backward ? gert::Shape{s, multiplier, d}
+                                      : gert::Shape{s * multiplier, d};
+    gert::Shape declaredShape = backward ? gert::Shape{s, multiplier, d} : gert::Shape{s, d};
     if (check == "flat") {
         Require(backward, "flat storage applies only to backward");
         inputShape = gert::Shape{s * multiplier, d};
     } else if (check == "rank") {
         inputShape = gert::Shape{s, d, 1};
+        declaredShape = gert::Shape{s, d, 1};
     } else if (check == "lane_mismatch") {
         Require(backward, "lane mismatch applies only to backward");
         inputShape = gert::Shape{s, multiplier + 1, d};
@@ -72,6 +79,7 @@ void Check(const std::vector<std::string> &fields, fe::PlatFormInfos &platform)
 
     const ge::DataType dtype = check == "dtype" ? ge::DT_FLOAT : DType(fields[1]);
     auto input = Tensor(inputShape, dtype);
+    auto declared = Tensor(declaredShape, dtype);
     const gert::Shape outputShape = backward ? gert::Shape{s, d} : gert::Shape{s, multiplier, d};
     auto output = Tensor(outputShape, dtype);
     std::vector<uint32_t> inputInstances = {check == "missing" ? 0U : 1U};
@@ -79,6 +87,10 @@ void Check(const std::vector<std::string> &fields, fe::PlatFormInfos &platform)
     std::vector<gert::Tensor *> inputs;
     if (inputInstances[0] != 0) {
         inputs.push_back(&input);
+    }
+    std::vector<gert::Tensor *> declaredInputs;
+    if (inputInstances[0] != 0) {
+        declaredInputs.push_back(&declared);
     }
     std::vector<gert::Tensor *> outputs = {&output};
     int compileInfo = 0;
@@ -111,7 +123,7 @@ void Check(const std::vector<std::string> &fields, fe::PlatFormInfos &platform)
         .IOInstanceNum(inputInstances, outputInstances)
         .AppendAttr(multiplier)
         .AppendAttr(backward)
-        .InputTensors(inputs)
+        .InputTensors(declaredInputs)
         .OutputTensorDesc(0, dtype, ge::FORMAT_ND, ge::FORMAT_ND)
         .Build();
     gert::OpInferDataTypeContextBuilder dtypeBuilder;

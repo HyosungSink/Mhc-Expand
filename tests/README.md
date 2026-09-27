@@ -114,14 +114,11 @@ Kernel 缓存键包含 Kernel 源码、Host/Tiling ABI、已编译 Tiling 库、
 
 ## Mock 与 Profiler
 
-八个 Mock Case 使用固定 seed 和配置生成可复现的本地合成输入。每个 Case 先检查首轮、末轮和 GM guard；启用 Profiler 时，再独立映射 `Task Duration(us)` 样本。
+八个 Mock Case 使用固定 seed 和配置生成可复现的本地输入。各用例在输入索引 0 和 17 使用固定的 FP16 位模式，其余元素使用确定性合成数据。每个 Case 检查首轮、末轮和 GM guard，并从 Profiler 原始样本计算设备耗时。
+输出错误率按解码后的 FP16 数值计算；若输出已经证实为 WA，即使 guard 同时受损也保留 WA 状态，并在观察记录中保留 guard 结果。
 
 `st/cases/mock.json` 的 `runtime` 是套件执行参数：普通页 `normal-only`、512B guard、
-`msprof op` 的 `BasicInfo`、5 次 Profiler 预热，以及 3 个独立进程。Native 每进程调用一次，
-由 Profiler 负责重放。全部观察保存在 `runs/<point>/process-<index>/`；数值与采样均通过时，
-才报告各进程设备耗时中位数的中位数。单进程 Correctness 使用独立的 64B guard 配置。
-
-历史材料与官方对照工具不属于测试套件。套件报告说明数值和采样有效性，不声称已达到官方性能目标。
+5 次预热和 3 个独立进程。Case 1、2、5 用 `msprof op` 重放；Case 3、4、6、8 使用任务级采样、24 个向量核和每进程 10 次测量，Case 7 采用相同采样方式和 32 个向量核。全部观察保存在 `runs/<point>/process-<index>/`；数值与采样均有效时，报告各进程设备耗时中位数的中位数。单进程 Correctness 使用独立的 64B guard 配置。
 
 ```bash
 python3 -m tests.st.scripts.profile_mock_workloads \
@@ -131,5 +128,5 @@ python3 -m tests.st.scripts.profile_mock_workloads \
 ```
 
 `--case` 可重复指定 1～8；`--warmup` 和 `--repeat` 控制进程内次数，`--processes` 控制独立进程数。
-`--profiler-backend`、`--allocation-policy` 和 `--guard-bytes` 可以显式覆盖默认协议，实际参数写入报告。
+`--profiler-backend`、`--vector-cores`、`--resource-mode`、`--allocation-policy` 和 `--guard-bytes` 可以显式覆盖默认协议，实际参数写入报告。
 缺少记录、样本数量不符、非有限耗时、数值错误、guard 错误或构建身份不一致均不能通过。

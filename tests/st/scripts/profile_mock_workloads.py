@@ -33,6 +33,12 @@ def select_cases(points: list[int]) -> tuple[dict, ...]:
     return selected
 
 
+def timing_settings(case: dict, overrides: dict) -> dict:
+    settings = {**MOCK_RUNTIME, **case.get("timing", {})}
+    settings.update({key: value for key, value in overrides.items() if value is not None})
+    return settings
+
+
 def kernel_rows(paths: list[Path], operator: str = "mhc") -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for path in paths:
@@ -53,6 +59,18 @@ def duration_samples(rows: list[dict[str, str]]) -> list[float]:
     if any(not math.isfinite(value) or value <= 0 for value in samples):
         raise ValueError("Profiler duration must be finite and positive")
     return samples
+
+
+def classify_output(returncode: int | None, runner_result: dict | None,
+                    library: Path, first: dict | None, final: dict | None) -> str:
+    if (returncode != 0 or not runner_result
+            or runner_result.get("status") != "executed"
+            or Path(runner_result.get("library", "")).resolve() != library.resolve()
+            or first is None or final is None):
+        return "INCONCLUSIVE"
+    if first["status"] == "Wrong Answer" or final["status"] == "Wrong Answer":
+        return "Wrong Answer"
+    return "Pass" if runner_result.get("guards_ok") is True else "INCONCLUSIVE"
 
 
 def _run_process(
@@ -194,17 +212,8 @@ def _run_process(
             result["median_us"] = statistics.median(measured)
             result["mean_us"] = statistics.mean(measured)
 
-    numerical_valid = (
-        returncode == 0
-        and bool(runner_result)
-        and runner_result.get("status") == "executed"
-        and runner_result.get("guards_ok") is True
-        and Path(runner_result.get("library", "")).resolve() == library.resolve()
-        and "first" in result and "final" in result
-    )
-    result["status"] = "INCONCLUSIVE"
-    if numerical_valid:
-        result["status"] = "Pass" if result["first"]["status"] == result["final"]["status"] == "Pass" else "Wrong Answer"
+    result["status"] = classify_output(returncode, runner_result, library,
+                                       result.get("first"), result.get("final"))
     result["passed"] = result["status"] == "Pass" and "timing_error" not in result
     (output / "result.json").write_text(json.dumps(result, indent=2) + "\n")
     return result
@@ -257,17 +266,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--case", type=int, action="append", default=[])
     parser.add_argument("--device", type=int, default=0)
-    parser.add_argument("--warmup", type=int, default=MOCK_RUNTIME["warmup"])
-    parser.add_argument("--repeat", type=int, default=MOCK_RUNTIME["repeat"])
+    parser.add_argument("--warmup", type=int)
+    parser.add_argument("--repeat", type=int)
     parser.add_argument("--processes", type=int, default=MOCK_RUNTIME["processes"])
     parser.add_argument("--allocation-policy", choices=("normal-only", "huge-first"), default=MOCK_RUNTIME["allocation_policy"])
     parser.add_argument("--guard-bytes", type=int, default=MOCK_RUNTIME["guard_bytes"])
     parser.add_argument("--profile", action="store_true")
-    parser.add_argument("--profiler-backend", choices=("task", "operator"), default=MOCK_RUNTIME["profiler_backend"])
+    parser.add_argument("--profiler-backend", choices=("task", "operator"))
+    parser.add_argument("--vector-cores", type=int)
+    parser.add_argument("--resource-mode", choices=("device", "stream"))
     parser.add_argument("--timeout", type=int, default=240)
     parser.add_argument("--jobs", type=int, default=16)
     args = parser.parse_args(argv)
-    if args.output.exists() or args.warmup < 0 or args.repeat < 1 or args.processes < 1 or args.guard_bytes < 1:
+    if args.output.exists() or (args.warmup is not None and args.warmup < 0) or (args.repeat is not None and args.repeat < 1) or args.processes < 1 or args.guard_bytes < 1 or (args.vector_cores is not None and args.vector_cores < 0):
         parser.error("output must be absent; warmup must be nonnegative and repeat positive")
 
     verify_final_build(args.build_dir)
@@ -277,20 +288,27 @@ def main(argv: list[str] | None = None) -> int:
     for case in select_cases(args.case):
         point = case["test_point"]
         fixture = materialize_mock_fixture(case, args.output / "fixtures" / str(point))
+        settings = timing_settings(case, {
+            "warmup": args.warmup, "repeat": args.repeat,
+            "profiler_backend": args.profiler_backend,
+            "vector_cores": args.vector_cores, "resource_mode": args.resource_mode,
+        })
         result = run_case(
             args.build_dir,
             fixture,
             args.output / "runs" / str(point),
             runner,
             device=args.device,
-            warmup=args.warmup,
-            repeat=args.repeat,
+            warmup=settings["warmup"],
+            repeat=settings["repeat"],
             profile=args.profile,
-            profiler_backend=args.profiler_backend,
+            profiler_backend=settings["profiler_backend"],
             timeout=args.timeout,
             processes=args.processes,
             allocation_policy=args.allocation_policy,
             guard_bytes=args.guard_bytes,
+            vector_cores=settings["vector_cores"],
+            resource_mode=settings["resource_mode"],
         )
         results.append({"test_point": point, **result})
         print(f"mock_case_{point}: {'PASS' if result['passed'] else 'FAIL'}", flush=True)

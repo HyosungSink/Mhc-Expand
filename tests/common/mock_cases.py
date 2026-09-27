@@ -28,6 +28,20 @@ def load_mock_suite(path: Path = MOCK_CONFIG) -> tuple[dict, ...]:
             raise ValueError("Mock shapes and multipliers must be positive")
         if case.get("pattern") not in {"uniform", "normal", "integer", "zeros", "ones"}:
             raise ValueError("unsupported Mock input pattern")
+        timing = case.get("timing", {})
+        if timing.get("profiler_backend", "operator") not in {"operator", "task"}:
+            raise ValueError("unsupported Mock profiler backend")
+        if any(type(timing.get(key, 1)) is not int or timing.get(key, 1) < 1
+               for key in ("repeat", "vector_cores")):
+            raise ValueError("invalid Mock timing counts")
+        observed = case.get("observed_input_bits", {})
+        if set(observed) != {"0", "17"}:
+            raise ValueError("Mock cases require the two observed input elements")
+        input_elements = int(case["s"]) * int(case["d"]) * (
+            int(case["m"]) if case["backward"] else 1)
+        for index, bits in observed.items():
+            if int(index) >= input_elements or not 0 <= int(bits, 16) <= 0xFFFF:
+                raise ValueError("invalid observed Mock input bits")
     return cases
 
 
@@ -70,6 +84,9 @@ def _mock_values(case: dict) -> np.ndarray:
 def materialize_mock_fixture(case: dict, directory: Path) -> Path:
     directory.mkdir(parents=True, exist_ok=False)
     encoded = encode_logical(_mock_values(case), case["dtype"])
+    raw = encoded.view(np.uint16).reshape(-1)
+    for index, bits in case["observed_input_bits"].items():
+        raw[int(index)] = int(bits, 16)
     encoded.tofile(directory / "input.bin")
     if case["backward"]:
         decoded = decode_logical(encoded, case["dtype"])
@@ -97,8 +114,12 @@ def compare_mock_output(
     golden = np.fromfile(fixture / "golden.bin", dtype="<u2")
     if actual.size != golden.size:
         raise ValueError("output shape mismatch")
-    actual_value = decode_logical(actual, case["dtype"])
-    golden_value = decode_logical(golden, case["dtype"])
+    if case["dtype"] == "float16":
+        actual_value = decode_logical(actual.view("<f2"), case["dtype"])
+        golden_value = decode_logical(golden.view("<f2"), case["dtype"])
+    else:
+        actual_value = decode_logical(actual, case["dtype"])
+        golden_value = decode_logical(golden, case["dtype"])
     error = np.abs(actual_value - golden_value)
     finite = np.isfinite(actual_value) & np.isfinite(golden_value)
     mismatches = int(np.count_nonzero(

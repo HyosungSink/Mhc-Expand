@@ -4,7 +4,7 @@ import csv
 
 import pytest
 
-from tests.st.scripts.profile_mock_workloads import duration_samples, kernel_rows
+from tests.st.scripts.profile_mock_workloads import classify_output, duration_samples, kernel_rows
 
 
 def test_profiler_mapping_selects_only_operator_rows(tmp_path) -> None:
@@ -27,6 +27,15 @@ def test_profiler_mapping_rejects_missing_duration(tmp_path) -> None:
         writer.writerow({"Op Name": "MhcExpand", "Duration": "3.5"})
     with pytest.raises(ValueError, match="Task Duration"):
         duration_samples(kernel_rows([path]))
+
+
+def test_wrong_output_remains_wrong_answer_when_guard_is_damaged(tmp_path) -> None:
+    library = tmp_path / "libcust_opapi.so"
+    execution = {"status": "executed", "library": str(library), "guards_ok": False}
+    wrong = {"status": "Wrong Answer"}
+    correct = {"status": "Pass"}
+    assert classify_output(0, execution, library, wrong, wrong) == "Wrong Answer"
+    assert classify_output(0, execution, library, correct, correct) == "INCONCLUSIVE"
 
 
 def test_mock_default_runtime_uses_independent_calibrated_processes(tmp_path, monkeypatch):
